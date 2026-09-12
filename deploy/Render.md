@@ -15,15 +15,28 @@ Lo que te da el plan gratuito de Render:
 
 Render despliega desde un repositorio, así que este paso es obligatorio.
 
+**El repositorio ya está hecho**: el proyecto tiene su `git init`, su `.gitignore`
+y su primer commit con los 83 archivos que hacen falta. Los datos de sesión y los
+archivos subidos quedan fuera.
+
 1. Crea una cuenta en **github.com** si no la tienes.
-2. **New repository** → nombre `hydrochem` → *Private* si prefieres que no se vea → **Create**.
-3. En la página del repositorio vacío, pincha **uploading an existing file** y arrastra **todo el contenido de la carpeta `hydrochem-web`** excepto:
-   - `data/sessions/` y `data/uploads/`
-   - `.claude/`
+2. Entra en **https://github.com/new**:
+   - **Repository name**: `hydrochem`
+   - *Private* si no quieres que se vea
+   - **NO marques** «Add a README file» — tiene que quedar vacío
+   - **Create repository**
+3. Copia la dirección que te muestra (`https://github.com/TU-USUARIO/hydrochem.git`).
+4. **Doble clic en `deploy/Subir a GitHub.bat`**, pega esa dirección y sigue.
 
-   Hacen falta: `app/`, `core/`, `tests/`, `tools/`, `data/samples/`, `deploy/`, `docs/`, `requirements.txt`, `render.yaml`, `Dockerfile`, `README.md`.
+El `.bat` te pedirá iniciar sesión en GitHub en una ventana aparte. **Esa
+contraseña la escribes tú**: no queda guardada en ningún archivo del proyecto.
 
-> `app/vendor/` pesa 4,6 MB (Plotly y Leaflet). **Tiene que ir**: es lo que hace que funcione sin depender de internet. GitHub admite archivos de hasta 25 MB por la web, así que no hay problema.
+> Si prefieres hacerlo a mano, desde una terminal en la carpeta `hydrochem-web`:
+>
+> ```bash
+> git remote add origin https://github.com/TU-USUARIO/hydrochem.git
+> git push -u origin main
+> ```
 
 ## 2. Crea el servicio en Render
 
