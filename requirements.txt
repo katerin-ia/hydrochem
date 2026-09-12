@@ -1,0 +1,11 @@
+# Dependencias de HydroChem. Versiones minimas probadas.
+#
+# No hay mas: la proyeccion UTM, la generacion de KML/KMZ y el lanzador de
+# pruebas estan implementados en el propio proyecto para no depender de
+# pyproj, simplekml ni pytest.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pandas>=2.0
+numpy>=1.24
+openpyxl>=3.1
+matplotlib>=3.7

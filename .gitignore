@@ -1,0 +1,19 @@
+# Datos de trabajo: nunca se publican
+data/sessions/
+data/uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Pruebas
+tests/_tmp*/
+
+# Sistema
+Thumbs.db
+.DS_Store
+
+# Configuracion local del editor
+.claude/

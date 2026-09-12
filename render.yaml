@@ -1,0 +1,38 @@
+# Plano de despliegue para Render (https://render.com).
+#
+# Con este archivo en la raiz del repositorio, Render configura el servicio solo:
+# Dashboard -> New -> Blueprint -> elige el repositorio.
+#
+# Se usa el entorno nativo de Python en lugar de Docker porque construye mas
+# rapido y el plan gratuito no necesita nada del contenedor. El Dockerfile sigue
+# ahi para Fly.io, Cloud Run o cualquier sitio que prefiera imagenes.
+
+services:
+  - type: web
+    name: hydrochem
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    # Render define PORT; la aplicacion lo lee y escucha en 0.0.0.0.
+    startCommand: python -m app.main
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # Sin bytecode ni buffer: los registros aparecen en el momento.
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # El disco del plan gratuito es efimero; /tmp es lo escribible.
+      - key: HC_WORKDIR
+        value: /tmp/hc-sessions
+      - key: MPLCONFIGDIR
+        value: /tmp/matplotlib
+      # El plan gratuito tiene 512 MB de RAM: cada sesion guarda su tabla en
+      # memoria, asi que conviene bajar el cupo respecto al valor local (40).
+      - key: HC_MAX_SESSIONS
+        value: "12"
+      - key: HC_SESSION_TTL_MIN
+        value: "45"
+      - key: HC_MAX_UPLOAD_MB
+        value: "15"

@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HydroChem</title>
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="/static/app.css?v=1789236296">
+</head>
+<body>
+
+<header>
+  <div class="brand">HydroChem <small>Analisis hidroquimico</small></div>
+  <div class="file-chip" id="file-chip" hidden><b id="file-name"></b><span id="file-meta"></span></div>
+  <div class="spacer"></div>
+  <input type="file" id="file-input" accept=".xlsx,.xlsm,.csv,.txt,.tsv" hidden>
+  <button class="btn" id="btn-open">Abrir archivo</button>
+  <button class="btn" id="btn-example">Cargar ejemplo</button>
+  <button class="btn" id="btn-demo">Demo con campañas</button>
+</header>
+
+<div class="body">
+  <nav class="rail" id="rail">
+    <button data-view="welcome" aria-current="true" title="Inicio">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg>
+      Inicio
+    </button>
+    <button data-view="data" disabled title="Tabla de datos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M3 14h18M9 4v16"/></svg>
+      Datos
+    </button>
+    <button data-view="validation" disabled title="Validacion">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>
+      Validar
+    </button>
+    <button data-view="piper" disabled title="Diagrama de Piper">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 21h-5l2.5-5zM23 21h-5l2.5-5zM12 3l4 7H8z"/></svg>
+      Piper
+    </button>
+    <button data-view="stiff" disabled title="Diagramas de Stiff">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v16M7 7l5-3 5 3M5 12l7-2 7 2M8 17l4-3 4 3"/></svg>
+      Stiff
+    </button>
+    <button data-view="durov" disabled title="Diagrama de Durov">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="12" height="12"/><path d="M9 9 4 4M9 21H3M21 9V3"/></svg>
+      Durov
+    </button>
+    <button data-view="norm" disabled title="Umbrales normativos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v18M5 8h14M7 8l-3 6h6zM17 8l-3 6h6z"/></svg>
+      Normas
+    </button>
+    <button data-view="map" disabled title="Mapa">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 4-6 3v13l6-3 6 3 6-3V4l-6 3z"/><path d="M9 4v13M15 7v13"/></svg>
+      Mapa
+    </button>
+    <button data-view="cross" disabled title="Mapa y Piper enlazados">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 8h10M7 8l3-3M7 8l3 3M17 16H7M17 16l-3-3M17 16l-3 3"/></svg>
+      Cruzado
+    </button>
+    <button data-view="temporal" disabled title="Evolucion en el tiempo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+      Tiempo
+    </button>
+    <button data-view="export" disabled title="Exportar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v12M8 11l4 4 4-4M4 19h16"/></svg>
+      Exportar
+    </button>
+  </nav>
+
+  <main>
+    <!-- INICIO -->
+    <section class="view welcome" data-view="welcome" data-active="true">
+      <div class="welcome-card">
+        <h1>Analisis hidroquimico de aguas</h1>
+        <p>Convierte a meq/L, calcula el balance ionico y la alcalinidad, y dibuja el
+           diagrama de Piper, los Stiff y el mapa de tus puntos de muestreo.</p>
+        <p>Abre tu hoja de Excel o tu CSV. La aplicacion reconoce las columnas por su
+           nombre, asi que no hace falta que uses una plantilla concreta.</p>
+        <div class="actions">
+          <button class="btn primary" id="btn-open-2">Abrir mi archivo</button>
+          <button class="btn" id="btn-example-2">Ver con datos de ejemplo</button>
+          <button class="btn" id="btn-demo-2">Demo sintética con 8 campañas</button>
+        </div>
+        <div class="drop" id="drop">o arrastra aqui tu archivo .xlsx, .xlsm o .csv</div>
+      </div>
+    </section>
+
+    <!-- DATOS -->
+    <section class="view" data-view="data" style="grid-template-columns:1fr 300px;gap:10px;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Muestras</span>
+          <div style="flex:1"></div>
+          <label class="control">Facies
+            <select id="sel-facies"></select>
+          </label>
+          <button class="btn" id="btn-mapping" style="padding:3px 9px">Columnas…</button>
+        </header>
+        <div class="body-flush" style="overflow:auto"><table id="data-table"></table></div>
+      </div>
+      <div class="pane">
+        <header>Muestra seleccionada</header>
+        <div class="body-scroll" id="detail-data"><div class="empty">Elige una fila de la tabla.</div></div>
+      </div>
+    </section>
+
+    <!-- VALIDACION -->
+    <section class="view" data-view="validation" style="grid-template-columns:1fr;padding:10px">
+      <div class="pane">
+        <header>Informe de validacion</header>
+        <div class="body-scroll" id="validation-body"></div>
+      </div>
+    </section>
+
+    <!-- PIPER -->
+    <section class="view" data-view="piper" style="grid-template-columns:1fr 300px;gap:10px;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Diagrama de Piper</span>
+          <div class="spacer" style="flex:1"></div>
+          <label class="control">Convencion
+            <select id="sel-convention"></select>
+          </label>
+          <label class="control">Color por
+            <select id="sel-colorby">
+              <option value="facies">Facies</option>
+              <option value="group">Grupo</option>
+              <option value="cbe">Balance de carga</option>
+              <option value="tds">TDS</option>
+              <option value="norm">Cumplimiento normativo</option>
+            </select>
+          </label>
+          <label class="control" title="Une por fecha las campañas de cada estación">
+            <input type="checkbox" id="chk-traj"> Trayectorias
+          </label>
+        </header>
+        <div class="note-line" id="piper-note"></div>
+        <div class="body-flush"><div class="plot" id="piper-plot"></div></div>
+      </div>
+      <div class="pane">
+        <header>Muestra seleccionada</header>
+        <div class="body-scroll" id="detail-piper"><div class="empty">Pasa el raton o haz clic sobre un punto.</div></div>
+      </div>
+    </section>
+
+    <!-- STIFF -->
+    <section class="view" data-view="stiff" style="grid-template-columns:1fr;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Diagramas de Stiff</span>
+          <div style="flex:1"></div>
+          <label class="control">Plantilla
+            <select id="sel-stiff"></select>
+          </label>
+          <label class="control">Mostrar
+            <select id="sel-stiff-mode">
+              <option value="group">Superpuestos por grupo</option>
+              <option value="each">Uno por muestra</option>
+            </select>
+          </label>
+        </header>
+        <div class="note-line" id="stiff-note"></div>
+        <div class="body-flush"><div class="plot" id="stiff-plot"></div></div>
+      </div>
+    </section>
+
+    <!-- DUROV -->
+    <section class="view" data-view="durov" style="grid-template-columns:1fr 300px;gap:10px;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Diagrama de Durov ampliado</span>
+          <div style="flex:1"></div>
+          <label class="control">Color por
+            <select id="sel-durovcolor">
+              <option value="facies">Facies</option>
+              <option value="group">Grupo</option>
+              <option value="cbe">Balance de carga</option>
+              <option value="tds">TDS</option>
+            </select>
+          </label>
+        </header>
+        <div class="note-line" id="durov-note"></div>
+        <div class="body-flush"><div class="plot" id="durov-plot"></div></div>
+      </div>
+      <div class="pane">
+        <header>Muestra seleccionada</header>
+        <div class="body-scroll" id="detail-durov"><div class="empty">Haz clic sobre un punto.</div></div>
+      </div>
+    </section>
+
+    <!-- NORMATIVA -->
+    <section class="view" data-view="norm" style="grid-template-columns:1fr;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Umbrales normativos</span>
+          <div style="flex:1"></div>
+          <label class="control">Norma
+            <select id="sel-standard"></select>
+          </label>
+          <label class="control">Parámetro
+            <select id="sel-normparam"></select>
+          </label>
+        </header>
+        <div class="note-line" id="norm-note"></div>
+        <div class="body-scroll" id="norm-body"></div>
+      </div>
+    </section>
+
+    <!-- MAPA -->
+    <section class="view" data-view="map" style="grid-template-columns:1fr 300px;gap:10px;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Mapa de puntos</span>
+          <div style="flex:1"></div>
+          <label class="control">Color por
+            <select id="sel-mapcolor">
+              <option value="facies">Facies</option>
+              <option value="group">Grupo</option>
+              <option value="cbe">Balance de carga</option>
+              <option value="tds">TDS</option>
+              <option value="norm">Cumplimiento normativo</option>
+            </select>
+          </label>
+          <label class="control">Coordenadas
+            <select id="sel-crs"></select>
+          </label>
+        </header>
+        <div class="body-flush"><div id="map"></div><div class="legend" id="map-legend"></div></div>
+      </div>
+      <div class="pane">
+        <header>Muestra seleccionada</header>
+        <div class="body-scroll" id="detail-map"><div class="empty">Haz clic en un punto del mapa.</div></div>
+      </div>
+    </section>
+
+    <!-- CRUZADO -->
+    <section class="view" data-view="cross">
+      <div class="grid-2 cross" style="width:100%">
+        <div class="pane">
+          <header>Mapa</header>
+          <div class="body-flush"><div id="map2"></div></div>
+        </div>
+        <div class="pane">
+          <header>Piper</header>
+          <div class="body-flush"><div class="plot" id="piper-plot2"></div></div>
+        </div>
+        <div class="pane">
+          <header>Muestras <span style="font-weight:400;text-transform:none;letter-spacing:0" id="cross-count"></span></header>
+          <div class="body-flush" style="overflow:auto"><table id="cross-table"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TEMPORAL -->
+    <section class="view" data-view="temporal" style="grid-template-columns:1fr;padding:10px">
+      <div class="pane">
+        <header class="controls" style="display:flex;align-items:center">
+          <span>Evolucion en el tiempo</span>
+          <div style="flex:1"></div>
+          <label class="control">Estacion
+            <select id="sel-station"></select>
+          </label>
+          <label class="control">Mostrar
+            <select id="sel-temporal-mode">
+              <option value="vertices">Vertices del Piper (%)</option>
+              <option value="stiff">Filas del Stiff (meq/L)</option>
+              <option value="params">Parametros fisico-quimicos</option>
+            </select>
+          </label>
+        </header>
+        <div class="note-line" id="temporal-note"></div>
+        <div class="body-flush" id="temporal-body"><div class="plot" id="temporal-plot"></div></div>
+      </div>
+    </section>
+
+    <!-- EXPORTAR -->
+    <section class="view" data-view="export" style="grid-template-columns:1fr;padding:10px">
+      <div class="pane">
+        <header>Exportar resultados</header>
+        <div class="body-scroll" id="export-body"></div>
+      </div>
+    </section>
+
+    <div class="sheet" id="mapping-sheet" hidden>
+      <div class="sheet-card">
+        <header>
+          <b>Mapeo de columnas</b>
+          <div style="flex:1"></div>
+          <button class="btn" id="mapping-close">Cerrar</button>
+          <button class="btn primary" id="mapping-apply">Aplicar y recalcular</button>
+        </header>
+        <p class="sheet-note" id="mapping-note"></p>
+        <div class="sheet-body"><table id="mapping-table"></table></div>
+      </div>
+    </div>
+
+    <div class="spinner" id="spinner" hidden>Calculando...</div>
+  </main>
+</div>
+
+<div class="status" id="status">
+  <span id="st-samples">Sin datos</span>
+  <span class="sep">|</span><span id="st-sel">0 seleccionadas</span>
+  <span class="sep">|</span><span id="st-conv"></span>
+  <span class="sep">|</span><span id="st-campaign"></span>
+  <span class="sep">|</span><span>meq/L</span>
+</div>
+
+<script src="/vendor/plotly.min.js"></script>
+<script src="/vendor/leaflet.js"></script>
+<script src="/static/app.js?v=1789236296"></script>
+</body>
+</html>

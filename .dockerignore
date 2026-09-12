@@ -1,0 +1,10 @@
+# Datos de usuario y de sesion: nunca entran en la imagen
+data/sessions/
+data/uploads/
+# Trabajo local
+.git/
+.claude/
+__pycache__/
+*.pyc
+tests/_tmp*/
+docs/figures/
