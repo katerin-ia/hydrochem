@@ -4,6 +4,8 @@ Herramienta de análisis hidroquímico de aguas subterráneas. Convierte a meq/L
 
 Sustituye al notebook de Colab `hydrochemistry_lab.ipynb`, corrigiendo los defectos detectados en la [auditoría](docs/AUDITORIA-FASE-0.md).
 
+> **¿Retomas el proyecto?** Empieza por [`docs/TRASPASO.md`](docs/TRASPASO.md): estado actual, decisiones tomadas y lo que no hay que romper.
+
 ---
 
 ## Cómo abrirla
