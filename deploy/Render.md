@@ -54,6 +54,28 @@ La primera construcción tarda entre 4 y 8 minutos (instala pandas, numpy y matp
 
 ---
 
+## Si el despliegue falla
+
+| Mensaje en los registros | Qué pasa |
+|---|---|
+| `Form data requires "python-multipart"` | Ya corregido: estaba sin declarar en `requirements.txt`. Si lo ves, es que tu copia es anterior al arreglo |
+| `ModuleNotFoundError: No module named 'X'` | Falta `X` en `requirements.txt` |
+| `Exited with status 1` sin más | Mira las líneas de arriba: el error real siempre está antes |
+| Construye pero no responde | ¿El *Start Command* es `python -m app.main`? |
+
+### Cómo volver a desplegar tras un arreglo
+
+Render vuelve a desplegar solo cada vez que envías cambios a GitHub. Desde una
+terminal en la carpeta `hydrochem-web`:
+
+```bash
+git add -A
+git commit -m "arreglo"
+git push
+```
+
+O desde el panel de Render: **Manual Deploy** → **Deploy latest commit**.
+
 ## Si el Blueprint no aparece
 
 Configúralo a mano: **New** → **Web Service** → elige el repositorio, y rellena:

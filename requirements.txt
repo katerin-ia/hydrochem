@@ -3,9 +3,24 @@
 # No hay mas: la proyeccion UTM, la generacion de KML/KMZ y el lanzador de
 # pruebas estan implementados en el propio proyecto para no depender de
 # pyproj, simplekml ni pytest.
+
 fastapi>=0.110
 uvicorn[standard]>=0.27
+
+# FastAPI lo exige para recibir archivos subidos (UploadFile / File). No
+# aparece en ningun "import" del proyecto, asi que es facil olvidarlo: sin el,
+# la aplicacion arranca y se cae en cuanto alguien sube una hoja de calculo.
+python-multipart>=0.0.9
+
 pandas>=2.0
 numpy>=1.24
 openpyxl>=3.1
 matplotlib>=3.7
+
+# --- Opcional -----------------------------------------------------------
+# scikit-learn habilita la imputacion por KNN. Son mas de 100 MB con scipy y
+# solo sirve para una de las cinco estrategias, asi que no se instala por
+# defecto: en un alojamiento gratuito alarga la construccion y consume memoria
+# que hace falta para otra cosa. Si lo quieres, descomenta la linea; la
+# aplicacion detecta si esta y oculta la opcion cuando no.
+# scikit-learn>=1.3

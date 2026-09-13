@@ -415,7 +415,8 @@ def options() -> dict:
             for t in stiff_mod.TEMPLATES.values()
         ],
         "imputation_methods": [
-            {"key": m.value, "name": m.label_es} for m in ImputationMethod
+            {"key": m.value, "name": m.label_es, "available": _method_available(m)}
+            for m in ImputationMethod
         ],
         "facies_schemes": [
             {"key": s.key, "name": s.name_es, "note": s.note_es}
@@ -440,6 +441,21 @@ def options() -> dict:
         "example_name": EXAMPLE.name,
         "demo_campaigns_available": DEMO_CAMPAIGNS.exists(),
     }
+
+
+def _method_available(method: ImputationMethod) -> bool:
+    """KNN necesita scikit-learn, que es opcional.
+
+    Si no esta instalado, la interfaz marca la opcion como no disponible en vez
+    de ofrecerla y fallar al elegirla.
+    """
+    if method is not ImputationMethod.KNN:
+        return True
+    try:
+        import sklearn  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _options_from(payload: dict) -> AnalysisOptions:
