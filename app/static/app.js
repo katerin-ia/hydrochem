@@ -31,10 +31,12 @@ const S = {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-const PALETTE = ['#0e6b75', '#b5651d', '#3f6386', '#8a2f43', '#4c7a3f',
-                 '#6b5b95', '#a2322c', '#2c6b4f', '#7a5c2e', '#55506b'];
+// Paleta retro de alta diferenciación: funciona sobre el papel cálido de la UI
+// y conserva contraste cuando los grupos se superponen en los diagramas.
+const PALETTE = ['#0d6e7b', '#b43c2b', '#5d4197', '#27704f', '#a94e10',
+                 '#176ca5', '#9b2e63', '#69702c', '#4d557f', '#7c4630'];
 
-const CBE_COLORS = { acceptable: '#2c6b4f', marginal: '#9a6413', rejected: '#a2322c', unknown: '#7f9299' };
+const CBE_COLORS = { acceptable: '#176b50', marginal: '#9b4a14', rejected: '#a72d45', unknown: '#657189' };
 const CBE_LABELS = { acceptable: 'Aceptable', marginal: 'Marginal', rejected: 'Rechazado', unknown: 'Sin datos' };
 
 function fmt(v, d = 2) {
@@ -56,8 +58,8 @@ function isDark() {
   return matchMedia('(prefers-color-scheme: dark)').matches;
 }
 const THEME = () => isDark()
-  ? { ink: '#e6eef0', ink2: '#9cb0b7', ink3: '#76898f', grid: '#2c4046', edge: '#c9d6d9', paper: 'rgba(0,0,0,0)' }
-  : { ink: '#12232a', ink2: '#53686f', ink3: '#7f9299', grid: '#c9d4d7', edge: '#12232a', paper: 'rgba(0,0,0,0)' };
+  ? { ink: '#fff8e7', ink2: '#d1d8e4', ink3: '#aeb9ce', grid: '#40506d', edge: '#fff8e7', paper: '#202e49' }
+  : { ink: '#18243b', ink2: '#435067', ink3: '#657189', grid: '#d6c8a9', edge: '#18243b', paper: '#fffdf7' };
 
 /* ------------------------------------------------------------------- colores */
 
@@ -72,7 +74,7 @@ function tdsScale() {
   return { min: Math.min(...vals), max: Math.max(...vals) };
 }
 
-const NORM_COLORS = { ok: '#2c6b4f', aesthetic: '#9a6413', health: '#a2322c' };
+const NORM_COLORS = { ok: '#176b50', aesthetic: '#9b4a14', health: '#a72d45' };
 const NORM_LABELS = {
   ok: 'Cumple todos los umbrales',
   aesthetic: 'Supera algún umbral organoléptico',
@@ -97,7 +99,7 @@ function colorFor(sample, mode) {
     if (sample.tds === null || !isFinite(min)) return '#7f9299';
     const t = max > min ? (sample.tds - min) / (max - min) : 0.5;
     // rampa sobria teal -> ambar
-    const c1 = [14, 107, 117], c2 = [181, 101, 29];
+    const c1 = [13, 110, 123], c2 = [180, 60, 43];
     return `rgb(${c1.map((v, i) => Math.round(v + t * (c2[i] - v))).join(',')})`;
   }
   return groupColors().get(sample.group) || '#7f9299';
