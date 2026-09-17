@@ -30,6 +30,9 @@ estas funciones producen
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import Counter
+from math import erfc, sqrt
+from statistics import median
 
 import pandas as pd
 
@@ -50,7 +53,7 @@ VERTEX_COLUMNS: tuple[str, ...] = (
 
 #: Numero minimo de campanas para que una tendencia signifique algo. Por debajo
 #: se pueden dibujar los puntos, pero no hablar de tendencia.
-MIN_CAMPAIGNS_FOR_TREND = 3
+MIN_CAMPAIGNS_FOR_TREND = 8
 
 
 @dataclass
@@ -368,4 +371,70 @@ def change_summary(
                 "n_campaigns": int(valid["sampled_at"].nunique()),
             }
         )
+    return pd.DataFrame(rows)
+
+
+def mann_kendall_sen(dates, values, min_campaigns: int = MIN_CAMPAIGNS_FOR_TREND) -> dict:
+    """Prueba Mann-Kendall y pendiente de Sen para una serie independiente.
+
+    Las fechas repetidas se resumen con su mediana para no contar dos veces una
+    misma campana. Es una prueba de tendencia monotona; no sustituye una
+    evaluacion hidrogeologica ni corrige autocorrelacion o estacionalidad.
+    """
+    frame = pd.DataFrame({"date": pd.to_datetime(dates, errors="coerce"), "value": values})
+    frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+    frame = frame.dropna().groupby("date", as_index=False)["value"].median().sort_values("date")
+    n = len(frame)
+    base = {"n_campaigns": int(n), "minimum": int(min_campaigns)}
+    if n < min_campaigns:
+        return {**base, "status": "insufficient", "message": f"Se necesitan al menos {min_campaigns} campanas."}
+
+    ys = frame["value"].tolist()
+    sign_sum = 0
+    slopes = []
+    dates_days = (frame["date"] - frame["date"].iloc[0]).dt.total_seconds().div(86400.0).tolist()
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            diff = ys[j] - ys[i]
+            sign_sum += (diff > 0) - (diff < 0)
+            days = dates_days[j] - dates_days[i]
+            if days > 0:
+                slopes.append(diff / days * 365.25)
+
+    ties = Counter(ys)
+    variance = (n * (n - 1) * (2 * n + 5) - sum(t * (t - 1) * (2 * t + 5) for t in ties.values())) / 18.0
+    if variance <= 0:
+        return {**base, "status": "flat", "s": int(sign_sum), "p_value": 1.0,
+                "sen_slope_year": 0.0, "message": "No hay variacion suficiente para estimar una tendencia."}
+    if sign_sum > 0:
+        z = (sign_sum - 1) / sqrt(variance)
+    elif sign_sum < 0:
+        z = (sign_sum + 1) / sqrt(variance)
+    else:
+        z = 0.0
+    p_value = erfc(abs(z) / sqrt(2.0))
+    slope = float(median(slopes)) if slopes else 0.0
+    if p_value < 0.05 and slope > 0:
+        status, message = "increasing", "Tendencia ascendente significativa (p < 0,05)."
+    elif p_value < 0.05 and slope < 0:
+        status, message = "decreasing", "Tendencia descendente significativa (p < 0,05)."
+    else:
+        status, message = "no_trend", "No se detecta una tendencia monotona significativa (p >= 0,05)."
+    return {
+        **base, "status": status, "message": message, "s": int(sign_sum),
+        "p_value": float(p_value), "sen_slope_year": slope,
+    }
+
+
+def trend_summary(
+    df: pd.DataFrame, parameters: list[str], stations: list[str] | None = None
+) -> pd.DataFrame:
+    """Resumen Mann-Kendall/Sen por estacion y parametro disponible."""
+    dated = _dated(df, stations)
+    present = [p for p in parameters if p in dated.columns]
+    rows = []
+    for station, block in dated.groupby(STATION_COL):
+        for parameter in present:
+            result = mann_kendall_sen(block[DATE_COL], block[parameter])
+            rows.append({"station_code": str(station), "parameter": parameter, **result})
     return pd.DataFrame(rows)

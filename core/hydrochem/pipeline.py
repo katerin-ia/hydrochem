@@ -17,6 +17,8 @@ from pathlib import Path
 import pandas as pd
 
 from .chemistry import facies as facies_mod
+from .chemistry import irrigation as irrigation_mod
+from .chemistry import equilibrium as eq_mod
 from .chemistry.alkalinity import ALKALINITY_COL, add_alkalinity
 from .chemistry.balance import CBE_COL, CBE_FLAG_COL, add_charge_balance
 from .chemistry.units import add_meq_columns, meq_column
@@ -255,6 +257,10 @@ def analyse(
     # -- 6d. umbrales normativos --------------------------------------------
     if opts.standard:
         work = std_mod.add_compliance(work, opts.standard)
+
+    # -- 6e. indices de riego y saturacion mineral -------------------------
+    work = irrigation_mod.add_irrigation_indices(work)
+    work = eq_mod.add_saturation_indices(work)
 
     # -- 7. geometria de los diagramas --------------------------------------
     projected = piper_mod.project(work, opts.piper_convention)

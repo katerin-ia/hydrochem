@@ -33,8 +33,18 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 // Paleta retro de alta diferenciación: funciona sobre el papel cálido de la UI
 // y conserva contraste cuando los grupos se superponen en los diagramas.
-const PALETTE = ['#0d6e7b', '#b43c2b', '#5d4197', '#27704f', '#a94e10',
-                 '#176ca5', '#9b2e63', '#69702c', '#4d557f', '#7c4630'];
+// Paleta categorica validada con scripts/validate_palette.js (modo claro):
+// banda de luminosidad, suelo de croma, separacion para daltonismo y contraste
+// sobre el papel. Se asignan en orden fijo y NUNCA se repiten en ciclo: a
+// partir del noveno grupo se pliegan en "Otros" (ver groupColors).
+const PALETTE = ['#0f7d52', '#c24a1f', '#3b56c4', '#a8267a',
+                 '#8a6a00', '#0e7f9e', '#9b2226', '#6b3fa0'];
+
+//: Color neutro para lo que no cabe en la paleta y para lo desconocido.
+const NEUTRO = '#566e60';
+
+//: Etiqueta del grupo que recoge todo lo que pasa de ocho.
+const OTROS = 'Otros';
 
 const CBE_COLORS = { acceptable: '#176b50', marginal: '#9b4a14', rejected: '#a72d45', unknown: '#657189' };
 const CBE_LABELS = { acceptable: 'Aceptable', marginal: 'Marginal', rejected: 'Rechazado', unknown: 'Sin datos' };
@@ -52,22 +62,55 @@ function toast(msg, isError) {
   setTimeout(() => el.remove(), isError ? 6000 : 3000);
 }
 
-function busy(on) { $('#spinner').hidden = !on; }
+function busy(on, mensaje) {
+  const el = $('#spinner');
+  el.hidden = !on;
+  if (on) el.textContent = mensaje || 'Calculando...';
+}
 
 function isDark() {
-  return matchMedia('(prefers-color-scheme: dark)').matches;
+  // La aplicacion tiene un unico tema claro. Se conserva la funcion porque
+  // varias graficas la consultan para elegir el color del borde de los puntos.
+  return false;
 }
-const THEME = () => isDark()
-  ? { ink: '#fff8e7', ink2: '#d1d8e4', ink3: '#aeb9ce', grid: '#40506d', edge: '#fff8e7', paper: '#202e49' }
-  : { ink: '#18243b', ink2: '#435067', ink3: '#657189', grid: '#d6c8a9', edge: '#18243b', paper: '#fffdf7' };
+
+// Colores que usan las graficas. Salen de la misma paleta que el CSS, para que
+// un grafico no desentone del panel que lo rodea.
+const THEME = () => ({
+  ink: '#16241d',
+  ink2: '#3d5548',
+  ink3: '#566e60',
+  grid: '#dbe9e1',
+  gridStrong: '#c3d9cc',
+  edge: '#16241d',
+  paper: '#ffffff',
+  accent: '#237551',
+  halo: '#ffffff'
+});
 
 /* ------------------------------------------------------------------- colores */
 
 function groupColors() {
+  // Ocho tonos validados; el resto se pliega en un neutro etiquetado "Otros".
+  // Generar un noveno color haria que dos grupos distintos se parecieran.
   const map = new Map();
-  (S.data?.groups || []).forEach((g, i) => map.set(g, PALETTE[i % PALETTE.length]));
+  (S.data?.groups || []).forEach((g, i) => {
+    map.set(g, i < PALETTE.length ? PALETTE[i] : NEUTRO);
+  });
   return map;
 }
+
+// Facies: mismos tonos validados, en orden fijo del catalogo para que una
+// facies conserve su color aunque cambie el conjunto de datos.
+function faciesColors() {
+  const map = new Map();
+  const codigos = (S.data?.facies?.counts || []).map(c => c.facies);
+  codigos.forEach((code, i) => {
+    map.set(code, i < PALETTE.length ? PALETTE[i] : NEUTRO);
+  });
+  return map;
+}
+
 
 function tdsScale() {
   const vals = S.samples.map(s => s.tds).filter(v => v !== null);
@@ -88,32 +131,53 @@ function normClass(sample) {
 }
 
 function colorFor(sample, mode) {
-  if (mode === 'facies') {
-    const table = S.data?.facies?.colors || {};
-    return table[sample.facies] || '#7f9299';
+  if (mode === 'facies') return faciesColors().get(sample.facies) || NEUTRO;
+  if (mode === 'fluorideLevel') {
+    // Semaforo, no rampa: lo que importa es si pasa el limite o no.
+    const v = sample.mgl ? sample.mgl.F : null;
+    if (v === null || v === undefined) return NEUTRO;
+    const limite = fluorideLimit();
+    if (v > limite) return '#a32020';
+    if (v > limite * 0.66) return '#8a5300';
+    return '#1c6b47';
   }
   if (mode === 'norm') return NORM_COLORS[normClass(sample)];
   if (mode === 'cbe') return CBE_COLORS[sample.cbe_flag] || CBE_COLORS.unknown;
   if (mode === 'tds') {
     const { min, max } = tdsScale();
-    if (sample.tds === null || !isFinite(min)) return '#7f9299';
+    if (sample.tds === null || !isFinite(min)) return NEUTRO;
     const t = max > min ? (sample.tds - min) / (max - min) : 0.5;
     // rampa sobria teal -> ambar
     const c1 = [13, 110, 123], c2 = [180, 60, 43];
     return `rgb(${c1.map((v, i) => Math.round(v + t * (c2[i] - v))).join(',')})`;
   }
-  return groupColors().get(sample.group) || '#7f9299';
+  return groupColors().get(sample.group) || NEUTRO;
 }
 
 function legendEntries(mode) {
   if (mode === 'facies') {
     const counts = S.data?.facies?.counts || [];
     const labels = S.data?.facies?.labels || {};
-    const colors = S.data?.facies?.colors || {};
+    const colors = faciesColors();
     return counts.map(c => ({
-      color: colors[c.facies] || '#7f9299',
+      color: colors.get(c.facies) || NEUTRO,
       label: `${labels[c.facies] || c.facies} (${c.n})`
     }));
+  }
+  if (mode === 'fluorideLevel') {
+    const limite = fluorideLimit();
+    const cuenta = (prueba) => S.samples.filter(s => {
+      const v = s.mgl ? s.mgl.F : null;
+      return v !== null && v !== undefined && prueba(v, limite);
+    }).length;
+    const sinDato = S.samples.filter(s => !s.mgl || s.mgl.F === null || s.mgl.F === undefined).length;
+    const entradas = [
+      { color: '#a32020', label: `Supera ${fmt(limite, 1)} mg/L (${cuenta((v, l) => v > l)})` },
+      { color: '#8a5300', label: `Cerca del limite (${cuenta((v, l) => v > l * 0.66 && v <= l)})` },
+      { color: '#1c6b47', label: `Por debajo (${cuenta((v, l) => v <= l * 0.66)})` }
+    ];
+    if (sinDato) entradas.push({ color: NEUTRO, label: `Sin medir (${sinDato})` });
+    return entradas;
   }
   if (mode === 'norm') {
     return Object.keys(NORM_LABELS).map(k => {
@@ -164,8 +228,40 @@ async function loadDemoCampaigns() {
   finally { busy(false); }
 }
 
+//: Extensiones que el servidor acepta. Se rellenan desde /api/options.
+const S_LIMITES = { formatos: ['.xlsx', '.xlsm', '.csv', '.txt', '.tsv'], maxMB: 25 };
+
+function dropError(mensaje) {
+  const caja = $('#drop-error');
+  const zona = $('#drop');
+  if (!caja) { if (mensaje) toast(mensaje, true); return; }
+  caja.hidden = !mensaje;
+  caja.innerHTML = mensaje || '';
+  if (zona) zona.classList.toggle('rejected', Boolean(mensaje));
+}
+
 async function uploadFile(file) {
-  busy(true);
+  // Se comprueba aqui lo que se puede comprobar aqui: asi el usuario se entera
+  // al instante en vez de esperar a que suban 20 MB para que se los rechacen.
+  const nombre = (file.name || '').toLowerCase();
+  const ext = nombre.includes('.') ? nombre.slice(nombre.lastIndexOf('.')) : '';
+  if (!S_LIMITES.formatos.includes(ext)) {
+    dropError(
+      `<b>${file.name}</b> no es una hoja de calculo. ` +
+      `Se admiten ${S_LIMITES.formatos.join(', ')}.<br>` +
+      `Si tus datos estan en Google Sheets, usa Archivo → Descargar → .xlsx.`);
+    return;
+  }
+  const mb = file.size / 1024 / 1024;
+  if (mb > S_LIMITES.maxMB) {
+    dropError(
+      `<b>${file.name}</b> pesa ${fmt(mb, 1)} MB y el limite son ${S_LIMITES.maxMB} MB.<br>` +
+      `Prueba a guardar solo la hoja de datos, o a dividir el archivo por campañas.`);
+    return;
+  }
+
+  dropError('');
+  busy(true, `Leyendo ${file.name}...`);
   const form = new FormData();
   form.append('file', file);
   try {
@@ -175,9 +271,12 @@ async function uploadFile(file) {
       throw new Error(d.detail);
     }
     adopt(await res.json());
-  } catch (e) { toast(e.message, true); }
-  finally { busy(false); }
+    toast(`${file.name}: ${S.data.n_samples} muestras leidas.`);
+  } catch (e) {
+    dropError(`No se pudo leer <b>${file.name}</b>.<br>${e.message}`);
+  } finally { busy(false); }
 }
+
 
 function currentOptions(extra) {
   const o = {
@@ -286,6 +385,7 @@ function refreshView() {
   if (S.view === 'temporal') drawTemporal();
   if (S.view === 'durov') drawDurov();
   if (S.view === 'norm') drawNorm();
+  if (S.view === 'fluoride') drawFluoride();
   if (S.view === 'map') { ensureMap('map'); paintMarkers('map', S.mapColorBy); }
   if (S.view === 'cross') {
     ensureMap('map2'); paintMarkers('map2', S.mapColorBy); drawPiper('piper-plot2');
@@ -311,7 +411,7 @@ function piperTraces(divId) {
   bg.outlines.forEach(poly => {
     traces.push({
       x: poly.map(p => p[0]), y: poly.map(p => p[1]), mode: 'lines', type: 'scatter',
-      hoverinfo: 'skip', showlegend: false, line: { color: th.edge, width: 1.4 }
+      hoverinfo: 'skip', showlegend: false, line: { color: th.edge, width: 1.8 }
     });
   });
 
@@ -329,16 +429,24 @@ function piperTraces(divId) {
     const subset = S.samples.filter(s => (porFacies ? s.facies : s.group) === cat);
     if (!subset.length) return;
     const colors = subset.map(s => colorFor(s, S.colorBy));
-    const sizes = subset.map(s => S.selection.has(s.id) ? 15 : 8);
+    const sizes = subset.map(s => S.selection.has(s.id) ? 16 : 9);
     const opac = subset.map(s => (S.selection.size === 0 || S.selection.has(s.id)) ? 0.95 : 0.18);
-    const lw = subset.map(s => S.selection.has(s.id) ? 2 : 0.6);
+    const lw = subset.map(s => S.selection.has(s.id) ? 2.6 : 1.4);
     const text = subset.map(s => hoverText(s));
     const common = {
       type: 'scattergl', mode: 'markers', name: g, legendgroup: g,
       customdata: subset.map(s => s.id), text,
       hovertemplate: '%{text}<extra></extra>',
-      marker: { color: colors, size: sizes, opacity: opac,
-                line: { color: isDark() ? '#0c1418' : '#ffffff', width: lw } }
+      // Separacion de marcas superpuestas: un anillo del color del papel
+      // deja ver dos puntos donde antes habia una mancha. El borde oscuro se
+      // reserva para la muestra seleccionada, que si debe destacar.
+      marker: {
+        color: colors, size: sizes, opacity: opac,
+        line: {
+          color: subset.map(s => S.selection.has(s.id) ? th.edge : th.halo),
+          width: subset.map(s => S.selection.has(s.id) ? 2.8 : 1.6)
+        }
+      }
     };
     traces.push({ ...common,
       x: subset.map(s => s.piper.cat[0]), y: subset.map(s => s.piper.cat[1]) });
@@ -432,17 +540,22 @@ function drawPiper(divId) {
   const b = S.data.piper.background.bounds;
   const th = THEME();
   const layout = {
-    margin: { l: 10, r: 10, t: 10, b: 10 },
+    margin: { l: 10, r: 10, t: 10, b: 54 },
     xaxis: { range: [b[0], b[2]], visible: false, fixedrange: false },
     yaxis: { range: [b[1], b[3]], visible: false, scaleanchor: 'x', scaleratio: 1 },
     annotations: piperAnnotations(),
     showlegend: true,
-    legend: { x: 0, y: 1, bgcolor: 'rgba(0,0,0,0)', font: { size: 10, color: th.ink2 } },
+    // Debajo y en horizontal: encima del triangulo cationico tapaba los puntos.
+    legend: {
+      orientation: 'h', x: 0, y: -0.02, xanchor: 'left', yanchor: 'top',
+      bgcolor: 'rgba(255,255,255,0.85)', bordercolor: th.grid, borderwidth: 1,
+      font: { size: 10, color: th.ink2 }
+    },
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
     hoverlabel: { align: 'left' },
     dragmode: 'lasso'
   };
-  const config = { displaylogo: false, responsive: true,
+  const config = { displaylogo: false, responsive: true, scrollZoom: true,
                    modeBarButtonsToRemove: ['autoScale2d', 'toggleSpikelines'] };
 
   Plotly.react(el, piperTraces(divId), layout, config);
@@ -568,7 +681,7 @@ function drawStiff() {
     const varios = panel.muestras.length > 1;
     panel.muestras.forEach(s => {
       const poly = stiffPolygon(s, nRows);
-      const color = gc.get(s.group) || '#0e6b75';
+      const color = gc.get(s.group) || PALETTE[0];
       const sel = S.selection.has(s.id);
       traces.push({
         x: poly.map(pt => pt[0]), y: poly.map(pt => pt[1]),
@@ -585,7 +698,7 @@ function drawStiff() {
 
   layout.height = Math.max(el.clientHeight, filas * (porMuestra ? 215 : 330));
 
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
   el.removeAllListeners?.('plotly_click');
   el.on('plotly_click', ev => {
     const id = ev.points?.[0]?.customdata;
@@ -679,7 +792,7 @@ function renderVertexPanels(el, data, estacion, th) {
     const y1 = 1 - fila / filas - 0.09, y0 = 1 - (fila + 1) / filas + 0.09;
 
     const esCation = v.indexOf('cat') >= 0;
-    const color = esCation ? '#0e6b75' : '#b5651d';
+    const color = esCation ? PALETTE[0] : PALETTE[1];
     const c = cambios.get(v);
     const delta = c ? c.delta_pp : null;
 
@@ -691,7 +804,7 @@ function renderVertexPanels(el, data, estacion, th) {
     let signo = '';
     if (delta !== null) {
       const flecha = delta > 0.5 ? ' ▲' : (delta < -0.5 ? ' ▼' : ' ▬');
-      const col2 = delta > 0 ? '#b5651d' : '#0e6b75';
+      const col2 = delta > 0 ? PALETTE[1] : PALETTE[0];
       signo = '  <span style="color:' + col2 + '">' +
               (delta > 0 ? '+' : '') + delta.toFixed(1) + ' pp' + flecha + '</span>';
     }
@@ -716,11 +829,11 @@ function renderVertexPanels(el, data, estacion, th) {
     showarrow: false, font: { size: 10, color: th.ink3 }
   });
   layout.height = Math.max(el.clientHeight, 440);
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
 }
 
 function renderStiffSeries(el, data, estacion, th) {
-  const colores = ['#0e6b75', '#b5651d', '#3f6386', '#8a2f43', '#4c7a3f', '#6b5b95', '#a2322c'];
+  const colores = [PALETTE[0], PALETTE[1], PALETTE[2], '#8a2f43', '#4c7a3f', '#6b5b95', '#a2322c'];
   const traces = [];
   (data.stiff || []).forEach(() => {});
   const porSerie = new Map();
@@ -747,7 +860,7 @@ function renderStiffSeries(el, data, estacion, th) {
              gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 } },
     legend: { font: { size: 10, color: th.ink2 }, orientation: 'h', y: 1.12 },
     hovermode: 'x unified', height: Math.max(el.clientHeight, 420)
-  }, { displaylogo: false, responsive: true });
+  }, { displaylogo: false, responsive: true, scrollZoom: true });
 }
 
 function renderParamSeries(el, data, estacion, th) {
@@ -787,7 +900,7 @@ function renderParamSeries(el, data, estacion, th) {
     traces.push({
       x: puntos.map(r => r.sampled_at), y: puntos.map(r => r.value),
       xaxis: refX, yaxis: refY, type: 'scatter', mode: 'lines+markers',
-      line: { color: '#3f6386', width: 2 }, marker: { size: 5, color: '#3f6386' }
+      line: { color: PALETTE[2], width: 2 }, marker: { size: 5, color: PALETTE[2] }
     });
   });
   layout.annotations.push({
@@ -796,7 +909,165 @@ function renderParamSeries(el, data, estacion, th) {
     font: { size: 10, color: th.ink3 }
   });
   layout.height = Math.max(el.clientHeight, 420);
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true });
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
+}
+
+/* ------------------------------------------------------------------ fluoruro
+
+   Reproduce la figura `fluoride_analysis.png` del notebook, que eran tres
+   paneles: caja por grupo, fluoruro frente a calcio, y distribucion espacial.
+   La maqueta estaba hecha pero nadie habia escrito el dibujo, asi que la
+   pantalla salia en blanco.
+
+   El fluoruro tiene pantalla propia porque es el unico ion del conjunto con
+   un limite sanitario que se supera de verdad, y porque la decision sobre sus
+   ceros (medidos o no medidos) cambia el resultado a la mitad.
+*/
+
+function fluorideLimit() {
+  const fila = (S.data.standard.rows || []).find(r => r.parameter === 'F_mgL');
+  return fila && fila.maximum !== null ? fila.maximum : 1.5;
+}
+
+function fluorideSamples() {
+  return S.samples.filter(s => s.mgl && s.mgl.F !== null && s.mgl.F !== undefined);
+}
+
+function drawFluoride() {
+  const medidas = fluorideSamples();
+  const limite = fluorideLimit();
+  const excede = medidas.filter(s => s.mgl.F > limite);
+  const sinMedir = S.data.n_samples - medidas.length;
+
+  const nota = $('#fluoride-note');
+  if (!medidas.length) {
+    nota.textContent = 'Tus datos no traen fluoruro medido, asi que no hay nada que dibujar.';
+    ['fluoride-boxplot', 'fluoride-scatter'].forEach(id => Plotly.purge(id));
+    return;
+  }
+  nota.innerHTML =
+    `<b>${excede.length}</b> de <b>${medidas.length}</b> muestras medidas ` +
+    `(${fmt(excede.length / medidas.length * 100, 1)} %) superan ${fmt(limite, 1)} mg/L` +
+    (sinMedir ? ` · <span style="color:var(--ink-3)">${sinMedir} sin medir, excluidas del porcentaje</span>` : '');
+
+  drawFluorideBox(medidas, limite);
+  drawFluorideScatter(medidas, limite);
+  ensureMap('fluoride-map');
+  paintMarkers('fluoride-map', 'fluorideLevel');
+}
+
+/* Caja por grupo con los puntos encima: la caja resume, los puntos evitan que
+   un grupo de dos muestras parezca una distribucion. */
+function drawFluorideBox(medidas, limite) {
+  const th = THEME();
+  const gc = groupColors();
+  const grupos = Array.from(new Set(medidas.map(s => s.group)));
+  const traces = [];
+
+  grupos.forEach(g => {
+    const sub = medidas.filter(s => s.group === g);
+    const color = gc.get(g) || th.accent;
+    traces.push({
+      y: sub.map(s => s.mgl.F), name: g, type: 'box',
+      boxpoints: 'all', jitter: 0.45, pointpos: 0,
+      marker: { color: color, size: 6, opacity: 0.85,
+                line: { color: th.halo, width: 1 } },
+      line: { color: color, width: 1.6 },
+      fillcolor: hexToRgba(color, 0.16),
+      hovertemplate: '%{y:.2f} mg/L<extra>' + g + '</extra>',
+      customdata: sub.map(s => s.id)
+    });
+  });
+
+  Plotly.react($('#fluoride-boxplot'), traces, {
+    margin: { l: 58, r: 16, t: 14, b: 76 },
+    paper_bgcolor: th.paper, plot_bgcolor: th.paper,
+    showlegend: false,
+    xaxis: { tickangle: -25, tickfont: { size: 10, color: th.ink2 },
+             gridcolor: th.grid, automargin: true },
+    yaxis: { title: { text: 'F⁻ (mg/L)', font: { size: 11, color: th.ink2 } },
+             gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 }, zeroline: false },
+    shapes: [limiteShape(limite, th)],
+    annotations: [limiteLabel(limite, th)],
+    hovermode: 'closest'
+  }, { displaylogo: false, responsive: true });
+
+  wireFluorideClick('#fluoride-boxplot');
+}
+
+/* Fluoruro frente a calcio. Es un indicador de saturacion en fluorita: cuando
+   el calcio sube, el fluoruro tiende a bajar porque precipita como CaF2. */
+function drawFluorideScatter(medidas, limite) {
+  const th = THEME();
+  const gc = groupColors();
+  const grupos = Array.from(new Set(medidas.map(s => s.group)));
+  const conCa = medidas.filter(s => s.mgl.Ca !== null && s.mgl.Ca !== undefined);
+  const traces = [];
+
+  grupos.forEach(g => {
+    const sub = conCa.filter(s => s.group === g);
+    if (!sub.length) return;
+    const color = gc.get(g) || th.accent;
+    traces.push({
+      x: sub.map(s => s.mgl.Ca), y: sub.map(s => s.mgl.F),
+      name: g, type: 'scatter', mode: 'markers',
+      marker: {
+        color: color, size: sub.map(s => S.selection.has(s.id) ? 15 : 9),
+        opacity: sub.map(s => (S.selection.size === 0 || S.selection.has(s.id)) ? 0.9 : 0.2),
+        // Anillo del color del papel: dos puntos superpuestos siguen leyendose
+        // como dos, no como una mancha.
+        line: { color: th.halo, width: sub.map(s => S.selection.has(s.id) ? 2.4 : 1.4) }
+      },
+      customdata: sub.map(s => s.id),
+      text: sub.map(s => `<b>${s.station}</b><br>${g}<br>Ca ${fmt(s.mgl.Ca, 1)} mg/L · F ${fmt(s.mgl.F, 2)} mg/L`),
+      hovertemplate: '%{text}<extra></extra>'
+    });
+  });
+
+  Plotly.react($('#fluoride-scatter'), traces, {
+    margin: { l: 58, r: 16, t: 14, b: 48 },
+    paper_bgcolor: th.paper, plot_bgcolor: th.paper,
+    xaxis: { title: { text: 'Ca²⁺ (mg/L)', font: { size: 11, color: th.ink2 } },
+             gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 }, zeroline: false },
+    yaxis: { title: { text: 'F⁻ (mg/L)', font: { size: 11, color: th.ink2 } },
+             gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 }, zeroline: false },
+    shapes: [limiteShape(limite, th)],
+    annotations: [limiteLabel(limite, th)],
+    legend: { font: { size: 10, color: th.ink2 }, orientation: 'h', y: -0.18 },
+    hovermode: 'closest'
+  }, { displaylogo: false, responsive: true });
+
+  wireFluorideClick('#fluoride-scatter');
+}
+
+function limiteShape(limite, th) {
+  return {
+    type: 'line', xref: 'paper', x0: 0, x1: 1, y0: limite, y1: limite,
+    line: { color: 'var(--err)', width: 1.6, dash: 'dash' }
+  };
+}
+
+function limiteLabel(limite, th) {
+  return {
+    xref: 'paper', x: 1, y: limite, xanchor: 'right', yanchor: 'bottom',
+    text: `limite ${fmt(limite, 1)} mg/L`, showarrow: false,
+    font: { size: 10, color: '#a32020' }
+  };
+}
+
+function wireFluorideClick(sel) {
+  const el = $(sel);
+  el.removeAllListeners?.('plotly_click');
+  el.on('plotly_click', ev => {
+    const id = ev.points?.[0]?.customdata;
+    if (id) setSelection([id]);
+  });
+}
+
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 /* ----------------------------------------------------------------------- mapa */
@@ -804,9 +1075,9 @@ function renderParamSeries(el, data, estacion, th) {
 function ensureMap(containerId) {
   if (S.maps[containerId]) { setTimeout(() => S.maps[containerId].invalidateSize(), 60); return; }
   const map = L.map(containerId, { zoomControl: true, attributionControl: true });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19,
-    attribution: '&copy; OpenStreetMap'
+    attribution: 'Imagenes &copy; Esri, Maxar, Earthstar Geographics y GIS User Community'
   }).addTo(map);
   map.setView([0, 0], 2);
   S.maps[containerId] = map;
@@ -829,7 +1100,7 @@ function paintMarkers(containerId, mode) {
     const dim = S.selection.size > 0 && !sel;
     const marker = L.circleMarker([s.lat, s.lon], {
       radius: sel ? 9 : 5.5,
-      color: sel ? (isDark() ? '#e6eef0' : '#12232a') : 'rgba(0,0,0,.35)',
+      color: sel ? THEME().ink : 'rgba(22,36,29,.35)',
       weight: sel ? 2 : 1,
       fillColor: colorFor(s, mode),
       fillOpacity: dim ? 0.25 : 0.9,
@@ -849,11 +1120,24 @@ function paintMarkers(containerId, mode) {
     map.fitBounds(L.latLngBounds(pts.map(s => [s.lat, s.lon])), { padding: [30, 30] });
     map._fittedOnce = true;
   }
-  if (containerId === 'map') renderLegend(mode);
+  // Cada mapa pinta su propia leyenda. Antes solo la tenia el principal, asi
+  // que el mapa de fluoruro salia sin explicar sus colores.
+  renderLegend(mode, containerId);
 }
 
-function renderLegend(mode) {
-  $('#map-legend').innerHTML = legendEntries(mode)
+const LEYENDAS = { map: '#map-legend', 'fluoride-map': '#fluoride-legend' };
+
+function renderLegend(mode, containerId = 'map') {
+  // Hay mapas sin leyenda propia (el de la vista cruzada). Se sale antes de
+  // consultar el DOM: querySelector('') lanza excepcion y, al propagarse,
+  // abortaba el dibujo del Piper que venia despues.
+  const selector = LEYENDAS[containerId];
+  if (!selector) return;
+  const destino = $(selector);
+  if (!destino) return;
+  const entradas = legendEntries(mode);
+  if (!entradas.length) { destino.innerHTML = ''; return; }
+  destino.innerHTML = entradas
     .map(e => `<div><i style="background:${e.color}"></i>${e.label}</div>`).join('');
 }
 
@@ -868,6 +1152,7 @@ function setSelection(ids) {
   if (S.view === 'stiff') drawStiff();
   if (S.view === 'durov') drawDurov();
   if (S.view === 'norm') drawNorm();
+  if (S.view === 'fluoride') drawFluoride();
   Object.keys(S.maps).forEach(k => paintMarkers(k, S.mapColorBy));
   markTableRows();
   renderDetail();
@@ -1075,7 +1360,7 @@ function drawDurov() {
     type: 'scattergl', mode: 'markers', showlegend: false,
     customdata: ids, text: texto, hovertemplate: '%{text}<extra></extra>',
     marker: { color: colores, size: tamanos, opacity: opac,
-              line: { color: isDark() ? '#0c1418' : '#ffffff', width: 0.6 } }
+              line: { color: th.halo, width: 1.3 } }
   };
   traces.push({ ...comun, x: d.square.map(p => p[0]), y: d.square.map(p => p[1]) });
   traces.push({ ...comun, x: d.cation.map(p => p[0]), y: d.cation.map(p => p[1]),
@@ -1115,7 +1400,7 @@ function drawDurov() {
     annotations: anotaciones,
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
     showlegend: false, hoverlabel: { align: 'left' }, dragmode: 'lasso'
-  }, { displaylogo: false, responsive: true });
+  }, { displaylogo: false, responsive: true, scrollZoom: true });
 
   if (!S.durovDrawn) {
     S.durovDrawn = true;
@@ -1305,6 +1590,7 @@ function wire() {
   $('#btn-open').addEventListener('click', pick);
   $('#btn-open-2').addEventListener('click', pick);
   $('#file-input').addEventListener('change', ev => {
+    dropError('');
     if (ev.target.files[0]) uploadFile(ev.target.files[0]);
     ev.target.value = '';
   });
@@ -1322,6 +1608,7 @@ function wire() {
     const f = ev.dataTransfer.files[0];
     if (f) uploadFile(f);
   });
+  drop.addEventListener('click', pick);
 
   $('#sel-convention').addEventListener('change', reanalyse);
   $('#sel-facies').addEventListener('change', reanalyse);
@@ -1386,6 +1673,14 @@ async function init() {
     $('#sel-crs').innerHTML = '<option value="">Detectar automáticamente</option>' +
       opts.crs_options.map(c =>
         `<option value="${c.epsg}">${c.name}</option>`).join('');
+    if (opts.limits) {
+      S_LIMITES.maxMB = opts.limits.max_upload_mb;
+      const fmts = $('#drop-formats');
+      if (fmts) {
+        fmts.textContent =
+          `Excel .xlsx y .xlsm, o CSV · hasta ${opts.limits.max_upload_mb} MB`;
+      }
+    }
     if (!opts.example_available) {
       $('#btn-example').disabled = true;
       $('#btn-example-2').disabled = true;

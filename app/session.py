@@ -59,6 +59,10 @@ class Session:
     workdir: Path
     dataset: Any = None
     source_path: Path | None = None
+    #: Proyecto reabierto desde HydroChem: conserva su tabla en memoria para
+    #: que "recalcular" siga funcionando aunque ya no exista un Excel original.
+    source_frame: Any = None
+    source_mapping: Any = None
     created: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
 
@@ -72,6 +76,8 @@ class Session:
     def clear(self) -> None:
         self.dataset = None
         self.source_path = None
+        self.source_frame = None
+        self.source_mapping = None
 
     def dispose(self) -> None:
         """Borra los archivos de la sesion. Lo que subio el usuario no se queda."""

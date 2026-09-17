@@ -3,52 +3,51 @@
    internet, y cargar fuentes remotas la rompe cuando no hay red. */
 
 :root {
-  /* Papel cálido + tinta azul: limpio como un cuaderno de Colab, con carácter retro. */
-  --ground: #f2eddf;
-  --surface: #fffdf7;
-  --surface-2: #f8f0db;
-  --ink: #18243b;
-  --ink-2: #435067;
-  --ink-3: #657189;
-  --rule: #d6c8a9;
-  --rule-soft: #e9dfc9;
-  --accent: #0d6e7b;
-  --accent-ink: #07545e;
-  --accent-soft: #ccecef;
-  --ok: #176b50;
-  --warn: #9b4a14;
-  --err: #a72d45;
-  --ok-soft: #d8eee3;
-  --warn-soft: #fae6c5;
-  --err-soft: #f8dce1;
+  /* Blanco de papel y verdes de agua. Un solo tema claro: sin modo oscuro, el
+     contraste solo hay que comprobarlo una vez y nadie ve fondos oscuros.
+     Los textos cumplen 4,5:1 sobre su fondo (AA para texto normal). */
+
+  /* Fondos, del mas hundido al mas elevado */
+  --ground: #eef4f0;          /* lienzo: verde muy desaturado, no gris */
+  --surface: #ffffff;         /* paneles */
+  --surface-2: #f4f9f6;       /* cabeceras de panel y filas alternas */
+  --surface-3: #e8f2ec;       /* realce suave */
+
+  /* Tinta. --ink sobre --surface da 13,8:1; --ink-2 da 7,1:1; --ink-3, 4,6:1 */
+  --ink: #16241d;
+  --ink-2: #3d5548;
+  --ink-3: #566e60;
+
+  /* Lineas */
+  --rule: #cfe0d6;
+  --rule-soft: #e3efe8;
+
+  /* Verde principal. --accent sobre blanco da 4,9:1, valido para texto;
+     --accent-ink es el tono para texto pequeno y enlaces (7,4:1). */
+  --accent: #237551;
+  --accent-ink: #1c6b47;
+  --accent-soft: #dcf0e5;
+  --accent-tint: #f0f9f4;
+
+  /* Estados. Todos comprobados sobre --surface y sobre su propio -soft */
+  --ok: #1c6b47;
+  --warn: #8a5300;
+  --err: #a32020;
+  --ok-soft: #dcf0e5;
+  --warn-soft: #fdf0d8;
+  --err-soft: #fce4e4;
+
+  /* Medidas */
   --rail: 74px;
   --header: 62px;
   --status: 28px;
-  --sans: "Trebuchet MS", "Aptos", "Arial Rounded MT Bold", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --display: "Arial Rounded MT Bold", "Trebuchet MS", "Aptos Display", sans-serif;
-  --mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
-}
+  --radius: 10px;
+  --shadow-sm: 0 1px 2px rgba(22, 36, 29, .06);
+  --shadow: 0 2px 4px rgba(22, 36, 29, .05), 0 10px 24px -16px rgba(22, 36, 29, .30);
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ground: #18243b;
-    --surface: #202e49;
-    --surface-2: #293956;
-    --ink: #fff8e7;
-    --ink-2: #d1d8e4;
-    --ink-3: #aeb9ce;
-    --rule: #40506d;
-    --rule-soft: #33435f;
-    --accent: #6fd6d7;
-    --accent-ink: #a7eeee;
-    --accent-soft: #174d5b;
-    --ok: #82dbab;
-    --warn: #ffc66b;
-    --err: #ff9aa9;
-    --ok-soft: #1d4b42;
-    --warn-soft: #59421d;
-    --err-soft: #572b3c;
-  }
+  --sans: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display: "Segoe UI Semibold", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -189,8 +188,9 @@ nav.rail button {
 nav.rail button svg { width: 18px; height: 18px; }
 nav.rail button:hover { color: var(--surface); background: color-mix(in srgb, var(--accent) 32%, transparent); }
 nav.rail button[aria-current="true"] {
-  color: var(--ink);
-  background: var(--accent);
+  /* Tinta fija oscura: el icono no pierde contraste sobre el celeste. */
+  color: #18243b;
+  background: #89e2df;
   box-shadow: 0 3px 0 color-mix(in srgb, var(--accent) 45%, #000);
 }
 nav.rail button:disabled { opacity: 0.3; cursor: not-allowed; }
@@ -242,9 +242,10 @@ main { min-width: 0; min-height: 0; overflow: hidden; position: relative; }
 
 /* ---------------- pantalla de bienvenida ---------------- */
 
-.welcome { place-items: center; padding: 24px; overflow: auto; }
+.welcome { place-items: start center; padding: 26px; overflow: auto; }
+.landing-shell { width: min(1120px, 100%); display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(330px, .92fr); gap: 22px; align-items: stretch; }
 .welcome-card {
-  max-width: 690px;
+  max-width: none;
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: 18px;
@@ -254,16 +255,44 @@ main { min-width: 0; min-height: 0; overflow: hidden; position: relative; }
 .welcome-card h1 { margin: 0 0 9px; font-family: var(--display); font-size: clamp(26px, 3vw, 34px); letter-spacing: -0.04em; line-height: 1.12; color: var(--accent-ink); }
 .welcome-card p { margin: 0 0 14px; color: var(--ink-2); }
 .welcome-card .actions { display: flex; gap: 10px; margin: 20px 0 6px; flex-wrap: wrap; }
+.eyebrow { margin: 0 0 8px !important; color: var(--accent-ink) !important; font-size: 10px; font-weight: 800; letter-spacing: .13em; }
 .drop {
+  width: 100%;
   border: 2px dashed var(--accent);
   border-radius: 12px;
   padding: 24px;
-  text-align: center;
+  text-align: left;
   color: var(--ink-3);
   margin: 18px 0 0;
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font: inherit;
   transition: border-color .12s, background .12s;
 }
 .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.drop:hover, .drop:focus-visible { border-style: solid; background: var(--accent-soft); color: var(--accent-ink); outline: none; }
+.drop strong { display: block; font-size: 13px; color: var(--ink); }
+.drop small { display: block; margin-top: 3px; color: var(--ink-2); font-size: 11.5px; }
+.drop-icon { width: 38px; height: 38px; flex: 0 0 38px; display: grid; place-items: center; border-radius: 12px; background: var(--accent); color: #fffdf7; font-family: var(--display); font-size: 25px; line-height: 1; }
+.landing-panel { background: var(--ink); color: #fff8e7; border-radius: 18px; padding: 35px; box-shadow: 7px 7px 0 #b43c2b; }
+.landing-panel .eyebrow { color: #89e2df !important; }
+.landing-panel h2 { margin: 0 0 25px; color: #fff8e7; font-family: var(--display); font-size: 28px; letter-spacing: -.04em; line-height: 1.06; }
+.feature-grid { display: grid; gap: 11px; }
+.feature-card { padding: 13px 14px 14px; border: 1px solid rgba(255,248,231,.23); border-radius: 12px; background: rgba(255,255,255,.045); }
+.feature-card > span { display: inline-grid; width: 25px; height: 21px; place-items: center; border-radius: 5px; background: #89e2df; color: #18243b; font-family: var(--mono); font-size: 10px; font-weight: 800; }
+.feature-card h3 { display: inline; margin: 0 0 0 8px; font-family: var(--display); font-size: 16px; }
+.feature-card p { margin: 7px 0 0; color: #d1d8e4; font-size: 12.5px; }
+.upload-guide { grid-column: 1 / -1; padding: 24px 28px; border: 1px solid var(--rule); border-radius: 16px; background: var(--surface); box-shadow: 0 4px 14px rgba(54, 43, 20, .05); }
+.upload-guide h2 { margin: 0; font-family: var(--display); font-size: 22px; letter-spacing: -.03em; }
+.guide-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; list-style: none; padding: 0; margin: 20px 0 16px; counter-reset: guide; }
+.guide-steps li { position: relative; padding: 13px 12px 12px 49px; border-radius: 11px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; }
+.guide-steps li::before { counter-increment: guide; content: counter(guide); position: absolute; left: 12px; top: 13px; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: #fffdf7; font-family: var(--display); font-weight: 700; }
+.guide-steps b, .guide-steps span { display: block; }
+.guide-steps b { margin-bottom: 3px; color: var(--ink); font-size: 13px; }
+.guide-tip { margin: 0; padding: 9px 12px; border-left: 4px solid #b43c2b; border-radius: 0 7px 7px 0; background: #fff0de; color: var(--ink-2); font-size: 12px; }
 
 /* ---------------- tablas ---------------- */
 
@@ -333,6 +362,21 @@ td.imp { font-style: italic; color: var(--warn); }
   background: var(--surface);
   font-size: 12px;
 }
+.control select, .sheet-body select {
+  appearance: none;
+  min-width: 118px;
+  padding-right: 30px;
+  color: var(--ink);
+  font-weight: 700;
+  background-color: var(--surface);
+  background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%), linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--rule) 65%, transparent);
+}
+.control select:hover, .sheet-body select:hover { border-color: var(--accent); background-color: var(--accent-soft); }
+.map-badge { padding: 3px 8px; border-radius: 999px; background: #18243b; color: #fff8e7; font-family: var(--sans); font-size: 9.5px; font-weight: 800; letter-spacing: .04em; text-transform: none; }
 .note-line {
   font-size: 11.5px;
   color: var(--ink-3);
@@ -353,7 +397,7 @@ td.imp { font-style: italic; color: var(--warn); }
 
 /* ---------------- mapa ---------------- */
 
-#map, #map2 { position: absolute; inset: 0; background: var(--surface-2); }
+#map, #map2, #fluoride-map { position: absolute; inset: 0; background: var(--surface-2); }
 .leaflet-container { background: var(--surface-2); font: inherit; }
 .legend {
   position: absolute;
@@ -492,6 +536,14 @@ td.imp { font-style: italic; color: var(--warn); }
 .plot .hoverlayer,
 .plot .legendtext { font-family: var(--sans) !important; }
 .plot .hoverlayer .hovertext { font-family: var(--sans) !important; }
+.trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; padding: 14px; overflow: auto; height: 100%; }
+.trend-card { border: 1px solid var(--rule); border-left: 5px solid var(--ink-3); border-radius: 10px; padding: 12px; background: var(--surface); }
+.trend-card.increasing { border-left-color: var(--err); }
+.trend-card.decreasing { border-left-color: var(--ok); }
+.trend-card.no_trend { border-left-color: var(--accent); }
+.trend-card.insufficient { border-left-color: var(--warn); }
+.trend-card h4 { margin: 0 0 5px; font-family: var(--display); font-size: 15px; }
+.trend-card p { margin: 3px 0; font-size: 12px; color: var(--ink-2); }
 
 @media (max-width: 760px) {
   :root { --header: auto; --rail: 100%; }
@@ -505,10 +557,32 @@ td.imp { font-style: italic; color: var(--warn); }
   nav.rail button { min-width: 62px; height: 49px; }
   main { min-height: 68vh; }
   .welcome { padding: 20px; }
+  .landing-shell { grid-template-columns: 1fr; gap: 18px; }
+  .landing-panel, .upload-guide { grid-column: auto; }
+  .landing-panel { padding: 27px 24px; box-shadow: 5px 5px 0 #b43c2b; }
+  .guide-steps { grid-template-columns: 1fr; gap: 9px; }
   .welcome-card { padding: 29px 24px; box-shadow: 5px 5px 0 var(--accent-soft); }
   .view[style*="300px"], .grid-2.cross { grid-template-columns: 1fr !important; grid-template-rows: auto !important; }
+  .fluoride-view { grid-template-columns: 1fr !important; grid-template-rows: repeat(3, minmax(330px, auto)) !important; }
+  .fluoride-view .pane:last-child { grid-column: auto !important; }
   .view[style*="300px"] .pane { min-height: 340px; }
   .cross > .pane:nth-child(3) { grid-column: auto; }
 }
 .norm-card .sub { font-size: 11.5px; color: var(--ink-3); }
 .norm-card .lim { font-size: 11.5px; color: var(--ink-2); margin-top: 4px; }
+
+/* ---------------- mensaje de error al subir ---------------- */
+
+.drop-error {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--err);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.drop-error b { font-weight: 650; }
+.drop.rejected { border-color: var(--err); background: var(--err-soft); }

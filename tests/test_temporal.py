@@ -16,18 +16,23 @@ from hydrochem.temporal import (
     MIN_CAMPAIGNS_FOR_TREND,
     build_index,
     change_summary,
+    mann_kendall_sen,
     normalise_dates,
     parameter_series,
     stiff_series,
     trajectories,
+    trend_summary,
     vertex_labels,
     vertex_series,
 )
 
-CAMPAIGNS = ["2023-03-15", "2023-09-20", "2024-03-18", "2024-09-25"]
+CAMPAIGNS = [
+    "2021-03-15", "2021-09-20", "2022-03-18", "2022-09-25",
+    "2023-03-15", "2023-09-20", "2024-03-18", "2024-09-25",
+]
 
 
-def synthetic_campaigns(n_stations: int = 5, n_campaigns: int = 4) -> pd.DataFrame:
+def synthetic_campaigns(n_stations: int = 5, n_campaigns: int = 8) -> pd.DataFrame:
     """Datos SINTETICOS con varias campanas, solo para probar el modulo.
 
     Se parte de estaciones reales y se aplica una deriva suave y determinista
@@ -96,9 +101,9 @@ def test_dates_are_recognised_and_normalised():
 def test_index_counts_campaigns_and_repeated_stations():
     idx = analysed_synthetic().temporal
     assert idx.has_dates
-    assert idx.n_campaigns == 4
+    assert idx.n_campaigns == 8
     assert len(idx.stations) == 5
-    assert len(idx.repeated_stations) == 5, "las 5 se miden en las 4 campanas"
+    assert len(idx.repeated_stations) == 5, "las 5 se miden en las 8 campanas"
     assert idx.can_plot_series
     assert idx.can_discuss_trend
 
@@ -130,7 +135,7 @@ def test_vertex_series_has_one_row_per_vertex_and_campaign():
         "pct_cat_left", "pct_cat_right", "pct_cat_apex",
         "pct_an_left", "pct_an_right", "pct_an_apex",
     }
-    assert len(s) == 5 * 4 * 6, "5 estaciones x 4 campanas x 6 vertices"
+    assert len(s) == 5 * len(CAMPAIGNS) * 6, "5 estaciones x campanas x 6 vertices"
     assert s["side"].isin(["cation", "anion"]).all()
 
 
@@ -175,7 +180,7 @@ def test_change_summary_reports_the_difference_in_points():
     assert (nak["delta_pp"] > 0).all(), "el sodio sube en todas las estaciones"
     ca = resumen[resumen["vertex"] == "pct_cat_left"]
     assert (ca["delta_pp"] < 0).all(), "y el calcio baja"
-    assert (resumen["n_campaigns"] == 4).all()
+    assert (resumen["n_campaigns"] == len(CAMPAIGNS)).all()
 
 
 def test_change_summary_skips_stations_with_a_single_campaign():
@@ -191,7 +196,7 @@ def test_stiff_series_covers_every_row_and_side():
     s = stiff_series(ds.data)
     assert set(s["row"]) == {0, 1, 2}
     assert set(s["side"]) == {"left", "right"}
-    assert len(s) == 5 * 4 * 3 * 2
+    assert len(s) == 5 * len(CAMPAIGNS) * 3 * 2
 
 
 def test_stiff_series_accepts_labels():
@@ -206,7 +211,7 @@ def test_parameter_series_for_tds_and_balance():
     ds = analysed_synthetic()
     s = parameter_series(ds.data, ["tds_mgl", "CBE_pct", "no_existe"])
     assert set(s["parameter"]) == {"tds_mgl", "CBE_pct"}
-    assert len(s) == 5 * 4 * 2
+    assert len(s) == 5 * len(CAMPAIGNS) * 2
 
 
 # -- trayectorias en el Piper -----------------------------------------------
@@ -218,7 +223,7 @@ def test_trajectories_are_ordered_by_date():
     for station, puntos in tr.items():
         fechas = [p["date"] for p in puntos]
         assert fechas == sorted(fechas)
-        assert len(puntos) == 4
+        assert len(puntos) == len(CAMPAIGNS)
         assert all(len(p["diamond"]) == 2 for p in puntos)
 
 
@@ -257,3 +262,31 @@ def test_unparseable_dates_are_counted_not_guessed():
 def test_normalise_dates_is_a_no_op_without_the_column():
     df = pd.DataFrame({"station_code": ["A"]})
     assert normalise_dates(df).equals(df)
+
+
+# -- tendencias Mann-Kendall y Sen ------------------------------------------
+
+
+def test_mann_kendall_sen_detects_monotonic_increase():
+    dates = [f"2020-0{i+1}-01" for i in range(8)]
+    values = [10.0 + 2.0 * i for i in range(8)]
+    res = mann_kendall_sen(dates, values)
+    assert res["status"] == "increasing"
+    assert res["p_value"] < 0.05
+    assert res["sen_slope_year"] > 0
+
+
+def test_mann_kendall_sen_detects_insufficient_data():
+    dates = ["2020-01-01", "2020-02-01", "2020-03-01"]
+    values = [10, 12, 14]
+    res = mann_kendall_sen(dates, values, min_campaigns=8)
+    assert res["status"] == "insufficient"
+
+
+def test_trend_summary_runs_on_synthetic_data():
+    ds = analysed_synthetic()
+    summary = trend_summary(ds.data, ["Na_mgL", "Cl_mgL"])
+    assert not summary.empty
+    assert "station_code" in summary.columns
+    assert "sen_slope_year" in summary.columns
+    assert set(summary["parameter"]) == {"Na_mgL", "Cl_mgL"}

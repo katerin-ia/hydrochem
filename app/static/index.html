@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HydroChem</title>
 <link rel="stylesheet" href="/vendor/leaflet.css">
-<link rel="stylesheet" href="/static/app.css?v=retro-20260912">
+<link rel="stylesheet" href="/static/app.css?v=1789609223">
 </head>
 <body>
 
@@ -14,6 +14,7 @@
   <div class="file-chip" id="file-chip" hidden><b id="file-name"></b><span id="file-meta"></span></div>
   <div class="spacer"></div>
   <input type="file" id="file-input" accept=".xlsx,.xlsm,.csv,.txt,.tsv" hidden>
+  <input type="file" id="project-input" accept=".hydrochem.json,application/json" hidden>
   <button class="btn" id="btn-open">Abrir archivo</button>
   <button class="btn" id="btn-example">Cargar ejemplo</button>
   <button class="btn" id="btn-demo">Demo con campañas</button>
@@ -49,6 +50,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v18M5 8h14M7 8l-3 6h6zM17 8l-3 6h6z"/></svg>
       Normas
     </button>
+    <button data-view="fluoride" disabled title="Analisis de fluoruro">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3c3.3 4.2 5.5 7.1 5.5 10.3A5.5 5.5 0 0 1 6.5 13.3C6.5 10.1 8.7 7.2 12 3Z"/><path d="M9 15.5c.6.8 1.4 1.2 2.5 1.2"/></svg>
+      Fluoruro
+    </button>
     <button data-view="map" disabled title="Mapa">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 4-6 3v13l6-3 6 3 6-3V4l-6 3z"/><path d="M9 4v13M15 7v13"/></svg>
       Mapa
@@ -70,18 +75,45 @@
   <main>
     <!-- INICIO -->
     <section class="view welcome" data-view="welcome" data-active="true">
-      <div class="welcome-card">
-        <h1>Analisis hidroquimico de aguas</h1>
-        <p>Convierte a meq/L, calcula el balance ionico y la alcalinidad, y dibuja el
-           diagrama de Piper, los Stiff y el mapa de tus puntos de muestreo.</p>
-        <p>Abre tu hoja de Excel o tu CSV. La aplicacion reconoce las columnas por su
-           nombre, asi que no hace falta que uses una plantilla concreta.</p>
-        <div class="actions">
-          <button class="btn primary" id="btn-open-2">Abrir mi archivo</button>
-          <button class="btn" id="btn-example-2">Ver con datos de ejemplo</button>
-          <button class="btn" id="btn-demo-2">Demo sintética con 8 campañas</button>
+      <div class="landing-shell">
+        <div class="welcome-card landing-hero">
+          <p class="eyebrow">LABORATORIO DIGITAL DE AGUAS</p>
+          <h1>Entiende la quimica de tu agua, muestra por muestra.</h1>
+          <p>HydroChem transforma una hoja de campo en un analisis claro: valida la calidad
+             de los datos, convierte unidades y conecta los diagramas con el mapa.</p>
+          <div class="actions">
+            <button class="btn primary" id="btn-open-2">Subir mis datos</button>
+            <button class="btn" id="btn-example-2">Explorar un ejemplo</button>
+            <button class="btn" id="btn-demo-2">Ver series temporales</button>
+            <a class="btn" href="/api/template" download>Descargar plantilla</a>
+            <button class="btn" id="btn-project-open">Reabrir proyecto</button>
+          </div>
+          <button class="drop" id="drop" type="button">
+            <span class="drop-icon" aria-hidden="true">↥</span>
+            <span><strong>Arrastra tu archivo aqui o haz clic para elegirlo</strong><small id="drop-formats">Excel o CSV</small></span>
+          </button>
+          <p class="drop-error" id="drop-error" hidden></p>
         </div>
-        <div class="drop" id="drop">o arrastra aqui tu archivo .xlsx, .xlsm o .csv</div>
+
+        <section class="landing-panel" aria-labelledby="que-hace">
+          <p class="eyebrow">TODO CONECTADO</p>
+          <h2 id="que-hace">Del laboratorio al territorio</h2>
+          <div class="feature-grid">
+            <article class="feature-card"><span aria-hidden="true">01</span><h3>Revisa</h3><p>Detecta columnas, valores faltantes y balance ionico antes de interpretar.</p></article>
+            <article class="feature-card"><span aria-hidden="true">02</span><h3>Interpreta</h3><p>Explora facies, Piper, Stiff, Durov, normas y cambios entre campañas.</p></article>
+            <article class="feature-card"><span aria-hidden="true">03</span><h3>Ubica</h3><p>Relaciona cada muestra con una vista satelital y exporta a Excel, QGIS o Google Earth.</p></article>
+          </div>
+        </section>
+
+        <section class="upload-guide" aria-labelledby="guia-carga">
+          <div class="guide-title"><p class="eyebrow">ANTES DE SUBIR</p><h2 id="guia-carga">Prepara tu hoja en tres pasos</h2></div>
+          <ol class="guide-steps">
+            <li><b>Una fila = una muestra</b><span>Usa la primera fila para los nombres de columnas; evita celdas combinadas y filas de titulo antes de ella.</span></li>
+            <li><b>Concentraciones en mg/L</b><span>Incluye Ca, Mg, Na, K, HCO3, SO4 y Cl. CO3, F, NO3, pH, TDS, fecha, grupo y coordenadas son opcionales pero muy utiles.</span></li>
+            <li><b>Deja que HydroChem reconozca</b><span>Acepta nombres en español o ingles. Si alguna columna no se detecta, podras corregirla en Datos → Columnas.</span></li>
+          </ol>
+          <p class="guide-tip"><b>Consejo:</b> para el mapa agrega Latitud/Longitud en WGS84 o coordenadas UTM; para evolucion agrega Fecha de muestreo o Campaña.</p>
+        </section>
       </div>
     </section>
 
@@ -206,11 +238,29 @@
       </div>
     </section>
 
+    <!-- FLUORURO -->
+    <section class="view fluoride-view" data-view="fluoride" style="grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:10px;padding:10px">
+      <div class="pane">
+        <header>Fluoruro por grupo</header>
+        <div class="note-line" id="fluoride-note"></div>
+        <div class="body-flush"><div class="plot" id="fluoride-boxplot"></div></div>
+      </div>
+      <div class="pane">
+        <header>Fluoruro frente a calcio</header>
+        <div class="note-line">Cada punto es una muestra; la linea marca la guia OMS de 1,5 mg/L.</div>
+        <div class="body-flush"><div class="plot" id="fluoride-scatter"></div></div>
+      </div>
+      <div class="pane" style="grid-column:1 / -1">
+        <header>Distribucion espacial de fluoruro</header>
+        <div class="body-flush"><div id="fluoride-map"></div><div class="legend" id="fluoride-legend"></div></div>
+      </div>
+    </section>
+
     <!-- MAPA -->
     <section class="view" data-view="map" style="grid-template-columns:1fr 300px;gap:10px;padding:10px">
       <div class="pane">
         <header class="controls" style="display:flex;align-items:center">
-          <span>Mapa de puntos</span>
+          <span>Mapa de puntos</span><span class="map-badge">Vista satelital</span>
           <div style="flex:1"></div>
           <label class="control">Color por
             <select id="sel-mapcolor">
@@ -265,6 +315,7 @@
               <option value="vertices">Vertices del Piper (%)</option>
               <option value="stiff">Filas del Stiff (meq/L)</option>
               <option value="params">Parametros fisico-quimicos</option>
+              <option value="trends">Tendencias Mann-Kendall / Sen</option>
             </select>
           </label>
         </header>
@@ -308,6 +359,6 @@
 
 <script src="/vendor/plotly.min.js"></script>
 <script src="/vendor/leaflet.js"></script>
-<script src="/static/app.js?v=retro-20260912"></script>
+<script src="/static/app.js?v=1789609223"></script>
 </body>
 </html>

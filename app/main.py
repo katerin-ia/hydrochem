@@ -24,6 +24,8 @@ if str(ROOT / "core") not in sys.path:
     sys.path.insert(0, str(ROOT / "core"))
 
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from fastapi import Cookie, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -63,9 +65,11 @@ except ImportError:  # ejecutado como script suelto
 from hydrochem.geometry import piper as piper_mod
 from hydrochem.geometry import stiff as stiff_mod
 from hydrochem.imputation.strategies import ImputationMethod
-from hydrochem.io.column_mapping import SCHEMA, ColumnMapping
+from hydrochem.io.column_mapping import BY_KEY, SCHEMA, ColumnMapping
 from hydrochem.pipeline import AnalysisOptions, Dataset, analyse
 from hydrochem import temporal as temporal_mod
+from hydrochem.chemistry import multivariate as multi_mod
+from hydrochem.chemistry import equilibrium as eq_mod
 
 STATIC = Path(__file__).parent / "static"
 VENDOR = Path(__file__).parent / "vendor"
@@ -181,6 +185,23 @@ def samples_payload(ds: Dataset) -> list[dict]:
                 "n_exceedances": int(row.get("n_exceedances") or 0),
                 "exceeds_health": bool(row.get("exceeds_health") or False),
                 "durov": [_clean(row.get("durov_x")), _clean(row.get("durov_y"))],
+                "irrigation": {
+                    "sar": _clean(row.get("SAR")),
+                    "sar_class": _clean(row.get("SAR_class")),
+                    "rsc": _clean(row.get("RSC")),
+                    "rsc_class": _clean(row.get("RSC_class")),
+                    "na_pct": _clean(row.get("Na_pct")),
+                    "kelley": _clean(row.get("Kelley_ratio")),
+                    "mr": _clean(row.get("Magnesium_ratio")),
+                    "wilcox": _clean(row.get("Wilcox_class")),
+                },
+                "saturation": {
+                    "calcite": _clean(row.get("SI_Calcite")),
+                    "gypsum": _clean(row.get("SI_Gypsum")),
+                    "fluorite": _clean(row.get("SI_Fluorite")),
+                    "halite": _clean(row.get("SI_Halite")),
+                    "ionic_strength": _clean(row.get("ionic_strength")),
+                },
             }
         )
     return out
@@ -243,6 +264,7 @@ def series_payload(ds: Dataset, stations: list[str]) -> dict:
                           "Alkalinity_mgCaCO3", "sum_cat", "sum_an")
               if c in ds.data.columns]
     series = temporal_mod.parameter_series(ds.data, params, stations)
+    trends = temporal_mod.trend_summary(ds.data, params, stations)
 
     def rows(frame: pd.DataFrame) -> list[dict]:
         if frame.empty:
@@ -261,6 +283,7 @@ def series_payload(ds: Dataset, stations: list[str]) -> dict:
         "vertices": rows(vertices),
         "changes": rows(cambios),
         "parameters": rows(series),
+        "trends": rows(trends),
         "stiff": rows(stiff),
         "trajectories": rutas,
         "parameter_labels": {
@@ -332,6 +355,34 @@ def _durov_payload(ds: Dataset) -> dict:
     }
 
 
+def _fluoride_summary(ds: Dataset) -> dict:
+    df = ds.data
+    if "F_mgL" not in df.columns:
+        return {"has_fluoride": False, "n_measured": 0}
+    vals = pd.to_numeric(df["F_mgL"], errors="coerce").dropna()
+    if vals.empty:
+        return {"has_fluoride": False, "n_measured": 0}
+    n_measured = len(vals)
+    n_exceed = int((vals > 1.5).sum())
+    n_severe = int((vals > 4.0).sum())
+    n_low = int((vals < 0.5).sum())
+    n_optimal = int(((vals >= 0.5) & (vals <= 1.5)).sum())
+    return {
+        "has_fluoride": True,
+        "n_measured": n_measured,
+        "n_exceed_who": n_exceed,
+        "pct_exceed_who": round(n_exceed / n_measured * 100.0, 1),
+        "n_severe": n_severe,
+        "n_low_caries": n_low,
+        "pct_low_caries": round(n_low / n_measured * 100.0, 1),
+        "n_optimal": n_optimal,
+        "pct_optimal": round(n_optimal / n_measured * 100.0, 1),
+        "min": round(float(vals.min()), 2),
+        "median": round(float(vals.median()), 2),
+        "max": round(float(vals.max()), 2),
+    }
+
+
 def dataset_payload(ds: Dataset, detected_zero_ions: list[str] | None = None) -> dict:
     """:param detected_zero_ions: iones con ceros sospechosos detectados **antes**
         de convertirlos. Hay que arrastrarlo: una vez convertidos ya no hay ceros
@@ -348,6 +399,8 @@ def dataset_payload(ds: Dataset, detected_zero_ions: list[str] | None = None) ->
         "has_dates": ds.has_dates,
         "campaigns": ds.campaigns,
         "temporal": temporal_payload(ds),
+        "fluoride": _fluoride_summary(ds),
+        "multivariate": multi_mod.run_pca_and_clustering(ds.data),
         "is_synthetic_demo": ds.source == DEMO_CAMPAIGNS.name,
         "options": ds.options.to_dict(),
         "suspicious_zero_ions": detected_zero_ions if detected_zero_ions is not None
@@ -474,7 +527,8 @@ def _options_from(payload: dict) -> AnalysisOptions:
 
 
 def _run(session: Session, source, opts: AnalysisOptions, sheet=None,
-         zeros_decided: bool = False) -> JSONResponse:
+         zeros_decided: bool = False, mapping: ColumnMapping | None = None,
+         display_name: str | None = None) -> JSONResponse:
     """Analiza y devuelve el resultado.
 
     Si el usuario no ha decidido nada sobre los ceros sospechosos, se aplica la
@@ -484,11 +538,11 @@ def _run(session: Session, source, opts: AnalysisOptions, sheet=None,
     opcion que sesga el resultado.
     """
     try:
-        ds = analyse(source, opts, sheet=sheet)
+        ds = analyse(source, opts, sheet=sheet, mapping=mapping)
         detected = suspicious_zero_ions(ds)
         if not zeros_decided and detected:
             opts.zeros_as_missing_for = tuple(detected)
-            ds = analyse(source, opts, sheet=sheet)
+            ds = analyse(source, opts, sheet=sheet, mapping=mapping)
         elif zeros_decided:
             # La deteccion se hace sobre el dato ya convertido, asi que no
             # encuentra nada; se recuerda lo que el usuario tiene en juego.
@@ -497,7 +551,17 @@ def _run(session: Session, source, opts: AnalysisOptions, sheet=None,
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"No se pudo leer el archivo: {exc}")
+    if display_name:
+        ds.source = display_name
     session.dataset = ds
+    if isinstance(source, pd.DataFrame):
+        session.source_frame = source.copy()
+        session.source_path = None
+        session.source_mapping = mapping
+    else:
+        session.source_frame = None
+        session.source_path = Path(source)
+        session.source_mapping = mapping
     payload = dataset_payload(ds, detected_zero_ions=detected)
     return _set_cookie(
         JSONResponse(json.loads(json.dumps(payload, allow_nan=False))), session
@@ -533,11 +597,13 @@ async def upload(request: Request, file: UploadFile = File(...)) -> JSONResponse
 def reanalyse(request: Request, payload: dict) -> JSONResponse:
     """Vuelve a calcular con otras opciones, sin volver a subir el archivo."""
     session = _session(request)
-    if session.source_path is None:
+    source = session.source_frame if session.source_frame is not None else session.source_path
+    if source is None:
         raise HTTPException(status_code=400, detail="Carga antes un archivo.")
     payload = payload or {}
-    return _run(session, session.source_path, _options_from(payload),
-                zeros_decided="zeros_as_missing_for" in payload)
+    return _run(session, source, _options_from(payload),
+                zeros_decided="zeros_as_missing_for" in payload,
+                mapping=session.source_mapping)
 
 
 @app.post("/api/demo-campaigns")
@@ -622,7 +688,7 @@ def mapping(request: Request) -> JSONResponse:
 def set_mapping(request: Request, payload: dict) -> JSONResponse:
     """Reanaliza con un mapeo corregido por el usuario."""
     session = _session(request)
-    source = session.source_path
+    source = session.source_frame if session.source_frame is not None else session.source_path
     if source is None:
         raise HTTPException(status_code=400, detail="Carga antes un archivo.")
     nuevo = ColumnMapping(mapping=dict(payload.get("mapping") or {}))
@@ -637,6 +703,7 @@ def set_mapping(request: Request, payload: dict) -> JSONResponse:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"No se pudo reanalizar: {exc}")
     session.dataset = ds
+    session.source_mapping = nuevo
     payload_out = dataset_payload(ds, detected_zero_ions=suspicious_zero_ions(ds))
     return _set_cookie(
         JSONResponse(json.loads(json.dumps(payload_out, allow_nan=False))), session
@@ -652,6 +719,136 @@ def _require_dataset(request: Request) -> Dataset:
 
 def _stem(ds: Dataset) -> str:
     return (ds.source.rsplit(".", 1)[0] or "hydrochem").replace(" ", "_")
+
+
+def _template_workbook() -> bytes:
+    """Crea una plantilla pequeña y explicada para la primera carga."""
+    headers = [
+        "Codigo de estacion", "Grupo", "Fecha de muestreo", "Latitud", "Longitud",
+        "pH", "TDS (mg/L)", "Calcio (mg/L)", "Magnesio (mg/L)",
+        "Sodio (mg/L)", "Potasio (mg/L)", "Bicarbonato (mg/L)",
+        "Carbonato (mg/L)", "Sulfato (mg/L)", "Cloruro (mg/L)",
+        "Fluoruro (mg/L)", "Nitrato (mg/L)",
+    ]
+    notes = [
+        "Identificador unico", "Zona, acuifero o campana", "AAAA-MM-DD (opcional)",
+        "Grados WGS84 o norte UTM", "Grados WGS84 o este UTM", "Opcional", "Opcional",
+        "Ion mayoritario", "Ion mayoritario", "Ion mayoritario", "Ion mayoritario",
+        "Ion mayoritario", "Opcional", "Ion mayoritario", "Ion mayoritario",
+        "Opcional; se compara con OMS", "Opcional",
+    ]
+    example = [
+        "PZ-01", "Sector norte", "2026-01-15", -12.0464, -77.0428, 7.3, 420,
+        68.2, 14.5, 52.1, 3.8, 185.0, 0.0, 48.0, 37.0, 0.7, 4.2,
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Datos"
+    dark = PatternFill("solid", fgColor="18243B")
+    soft = PatternFill("solid", fgColor="F8F0DB")
+    for col, (header, note, value) in enumerate(zip(headers, notes, example), 1):
+        head = ws.cell(1, col, header)
+        head.fill = dark
+        head.font = Font(color="FFFDF7", bold=True)
+        head.alignment = Alignment(horizontal="center", wrap_text=True)
+        desc = ws.cell(2, col, note)
+        desc.fill = soft
+        desc.alignment = Alignment(wrap_text=True)
+        ws.cell(3, col, value)
+        ws.column_dimensions[head.column_letter].width = max(15, min(25, len(header) + 4))
+    ws.freeze_panes = "A2"
+    ws.row_dimensions[1].height = 32
+    ws.row_dimensions[2].height = 30
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def _project_document(ds: Dataset) -> dict:
+    """Formato portable de HydroChem: datos de entrada, mapeo y opciones.
+
+    No guarda los resultados calculados: al abrirlo se calculan de nuevo para
+    que nunca sobrevivan resultados incompatibles con una version futura.
+    """
+    if ds.read_result is not None:
+        frame = ds.read_result.data.copy()
+        mapping = dict(ds.mapping.mapping)
+    else:
+        cols = [field.key for field in SCHEMA if field.key in ds.data.columns]
+        frame = ds.data.loc[:, cols].copy()
+        mapping = {column: column for column in cols}
+    records = json.loads(frame.to_json(orient="records", date_format="iso"))
+    return {
+        "format": "hydrochem-project",
+        "version": 1,
+        "source": ds.source,
+        "options": ds.options.to_dict(),
+        "mapping": mapping,
+        "records": records,
+    }
+
+
+@app.get("/api/template")
+def template() -> Response:
+    """Plantilla Excel con cabeceras que la deteccion reconoce sin ajustes."""
+    return Response(
+        _template_workbook(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="plantilla_hydrochem.xlsx"'},
+    )
+
+
+@app.get("/api/project")
+def export_project(request: Request) -> Response:
+    ds = _require_dataset(request)
+    text = json.dumps(_project_document(ds), ensure_ascii=False, separators=(",", ":"))
+    return Response(
+        text.encode("utf-8"), media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{_stem(ds)}.hydrochem.json"'},
+    )
+
+
+@app.post("/api/project")
+async def import_project(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    """Reabre un proyecto guardado por HydroChem, sin ejecutar archivos."""
+    raw = await file.read(MAX_UPLOAD_MB * 1024 * 1024 + 1)
+    if len(raw) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="El proyecto supera el limite de tamano.")
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="No es un proyecto HydroChem JSON valido.") from exc
+    if document.get("format") != "hydrochem-project" or document.get("version") != 1:
+        raise HTTPException(status_code=400, detail="El archivo no corresponde a un proyecto HydroChem compatible.")
+    records = document.get("records")
+    if not isinstance(records, list) or not records:
+        raise HTTPException(status_code=400, detail="El proyecto no contiene muestras para analizar.")
+    frame = pd.DataFrame(records)
+    mapping_data = document.get("mapping") or {}
+    if not isinstance(mapping_data, dict):
+        raise HTTPException(status_code=400, detail="El mapeo del proyecto no es valido.")
+    mapping = ColumnMapping(
+        mapping={str(k): str(v) for k, v in mapping_data.items()
+                 if str(k) in BY_KEY and str(v) in frame.columns}
+    )
+    if mapping.missing_required:
+        raise HTTPException(status_code=400, detail="El proyecto no trae: " + ", ".join(mapping.missing_required))
+    session = _session(request)
+    name = str(document.get("source") or "proyecto_hydrochem")
+    return _run(session, frame, _options_from(document.get("options") or {}),
+                mapping=mapping, display_name=name)
+
+
+@app.get("/api/export/phreeqc")
+def export_phreeqc(request: Request) -> Response:
+    """Genera un archivo de script por lotes .pqi para USGS PHREEQC."""
+    ds = _require_dataset(request)
+    pqi_text = eq_mod.generate_phreeqc_pqi(ds.data, title=f"HydroChem - {_stem(ds)}")
+    return Response(
+        pqi_text.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{_stem(ds)}.pqi"'},
+    )
 
 
 @app.get("/api/export/kmz")
