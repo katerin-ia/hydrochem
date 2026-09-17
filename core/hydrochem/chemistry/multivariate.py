@@ -2,15 +2,19 @@
 
 Permite identificar patrones hidrogeoquimicos y agrupamientos naturales
 sin supervisar, basandose en las concentraciones de los iones principales.
+
+scikit-learn es OPCIONAL y por eso no se importa aqui arriba. Son mas de
+100 MB con scipy, y en el alojamiento gratuito no esta instalado. Importarlo
+al cargar el modulo tumbaba la aplicacion entera al arrancar -no solo esta
+pantalla- porque ``app/main.py`` importa este modulo. El import va dentro de
+la funcion, y cuando falta se devuelve un resultado que lo dice en vez de
+reventar; la interfaz ya sabe leer ese ``status``.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
 
 # Columnas candidatas para el analisis multivariante
 MULTIVARIATE_FEATURES = [
@@ -19,27 +23,52 @@ MULTIVARIATE_FEATURES = [
 ]
 
 
+def available() -> bool:
+    """Si scikit-learn esta instalado en este entorno."""
+    try:
+        import sklearn  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _no_disponible(mensaje: str, status: str = "insufficient") -> dict:
+    """Respuesta con la forma de siempre para que la interfaz no se entere."""
+    return {
+        "status": status,
+        "message": mensaje,
+        "samples": [], "loadings": [], "explained_variance": [0.0, 0.0],
+    }
+
+
 def run_pca_and_clustering(df: pd.DataFrame, n_clusters: int = 3) -> dict:
     """Ejecuta PCA (2 componentes principales) y agrupamiento K-Means.
 
     Devuelve un diccionario estructurado con coordenadas de muestras,
     varianza explicada, cargas factoriales (loadings) y resumen por cluster.
+
+    Si falta scikit-learn devuelve ``status="unavailable"``: el resto de la
+    aplicacion tiene que seguir funcionando sin el.
     """
+    try:
+        from sklearn.cluster import KMeans
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+    except ImportError:
+        return _no_disponible(
+            "El analisis multivariante (PCA y agrupamiento) necesita "
+            "scikit-learn, que no esta instalado en este servidor. Todo lo "
+            "demas funciona igual.",
+            status="unavailable",
+        )
+
     if len(df) < 3:
-        return {
-            "status": "insufficient",
-            "message": "Se necesitan al menos 3 muestras para el analisis multivariante.",
-            "samples": [], "loadings": [], "explained_variance": [0.0, 0.0]
-        }
+        return _no_disponible("Se necesitan al menos 3 muestras para el analisis multivariante.")
 
     # Seleccionar columnas presentes que tengan valores numericos
     present = [c for c in MULTIVARIATE_FEATURES if c in df.columns]
     if len(present) < 3:
-        return {
-            "status": "insufficient",
-            "message": "Se requieren al menos 3 variables hidroquimicas.",
-            "samples": [], "loadings": [], "explained_variance": [0.0, 0.0]
-        }
+        return _no_disponible("Se requieren al menos 3 variables hidroquimicas.")
 
     sub = df[present].apply(pd.to_numeric, errors="coerce")
     # Imputar faltantes con la mediana de cada columna
@@ -49,11 +78,7 @@ def run_pca_and_clustering(df: pd.DataFrame, n_clusters: int = 3) -> dict:
     std = sub_clean.std()
     valid_cols = [c for c in present if std[c] > 1e-6]
     if len(valid_cols) < 2:
-        return {
-            "status": "insufficient",
-            "message": "No hay variacion suficiente en las variables.",
-            "samples": [], "loadings": [], "explained_variance": [0.0, 0.0]
-        }
+        return _no_disponible("No hay variacion suficiente en las variables.")
 
     X = sub_clean[valid_cols].to_numpy()
     scaler = StandardScaler()

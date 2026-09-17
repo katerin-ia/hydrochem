@@ -165,13 +165,31 @@ python tests/run_tests.py piper      # filtra por nombre de archivo
 
 ## 7. Estado del despliegue
 
-**Donde lo dejamos:** el usuario subió el proyecto a GitHub e intentó desplegar en Render. **Falló** por `python-multipart` sin declarar. Ya está corregido en el commit `b9b55c1`, **pero el usuario aún no ha vuelto a desplegar**.
-
 **Lo primero que debes preguntar:** si ya hizo `git push` y si el despliegue funcionó.
 
 Archivos listos: `render.yaml` (blueprint), `Dockerfile`, `requirements.txt`, `deploy/Render.md`, `deploy/Subir a GitHub.bat`.
 
-> **Lección del fallo**: `python-multipart` no aparece en ningún `import` del proyecto — lo exige FastAPI por dentro para `UploadFile`. Un repaso de imports no lo encuentra. `tests/test_requirements.py` cubre ahora esa clase de fallo.
+### Los dos despliegues que fallaron
+
+Los dos por lo mismo de fondo: **en esta máquina el paquete estaba instalado y por eso no se notó**. Los dos son ahora pruebas.
+
+**1. `python-multipart` sin declarar** (corregido en `b9b55c1`).
+No aparece en ningún `import` del proyecto — lo exige FastAPI por dentro para `UploadFile` —, así que un repaso de imports no lo encuentra.
+
+**2. `ModuleNotFoundError: No module named 'sklearn'`.**
+El simétrico del anterior: aquí el paquete **sí** aparecía en un `import`, en la cabecera de `chemistry/multivariate.py`. Pero scikit-learn es opcional a propósito (más de 100 MB con scipy) y está comentado en `requirements.txt`. Un import de un paquete opcional en la cabecera de un módulo **no degrada esa pantalla: tumba la aplicación entera al arrancar**, porque `app/main.py` importa ese módulo. Ahora el import va dentro de la función y `run_pca_and_clustering` devuelve `status="unavailable"` con un mensaje, sin reventar.
+
+> **La regla, para no repetirlo:** un paquete que no esté en `requirements.txt` **nunca** se importa en la cabecera de un módulo. Va dentro de la función que lo usa, o envuelto en `try/except ImportError`.
+
+`tests/test_requirements.py` cubre las dos clases de fallo:
+
+| Prueba | Qué atrapa |
+|---|---|
+| `test_no_optional_package_is_imported_at_module_level` | Recorre el AST de `core/` y `app/` y falla si un paquete opcional aparece en un import de primer nivel |
+| `test_the_app_starts_with_only_the_declared_packages` | Arranca la aplicación en un proceso aparte donde importar scikit-learn lanza `ImportError`, igual que en Render |
+| `test_uploading_a_file_works_with_what_is_declared` | Sube un CSV de verdad por el endpoint que falló la primera vez |
+
+Las tres se comprobaron **reintroduciendo el error a propósito** y viendo que fallan. Una prueba que no has visto fallar no sabes si prueba algo.
 
 Límites en Render (512 MB): `HC_MAX_SESSIONS=12`, `HC_SESSION_TTL_MIN=45`, `HC_MAX_UPLOAD_MB=15`.
 

@@ -7,14 +7,30 @@ Existe por un fallo real: el primer despliegue en Render murio con
 ``python-multipart`` no aparece en ningun ``import`` del proyecto -lo exige
 FastAPI por dentro cuando un endpoint recibe ``UploadFile``- asi que un repaso
 de los imports no lo encuentra. En local estaba instalado por otra via y todo
-funcionaba. Estas pruebas comprueban lo que de verdad hace falta en marcha, no
-solo lo que se escribe con ``import``.
+funcionaba.
+
+Y por un segundo fallo, el simetrico. El despliegue siguiente murio con
+
+    ModuleNotFoundError: No module named 'sklearn'
+
+Esta vez el paquete SI aparecia en un import: ``chemistry/multivariate.py`` lo
+ponia arriba del todo. Pero scikit-learn es opcional a proposito -pesa mas de
+100 MB- y no esta en ``requirements.txt``. Un import de un paquete opcional en
+la cabecera de un modulo no degrada esa pantalla: tumba la aplicacion entera al
+arrancar, porque ``app/main.py`` importa ese modulo.
+
+La leccion es la misma las dos veces: en esta maquina estaba instalado y por eso
+no se noto. Estas pruebas comprueban lo que de verdad hace falta en marcha, no
+solo lo que se escribe con ``import``; y la de abajo lo hace **fingiendo que los
+paquetes opcionales no existen**, que es la unica forma de verlo sin desplegar.
 """
 
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +109,125 @@ def test_uploading_a_file_works_with_what_is_declared():
     )
     assert r.status_code == 200, r.text
     assert r.json()["n_samples"] == 1
+
+
+# -- el segundo fallo: un paquete opcional importado en la cabecera ---------
+
+
+def _imports_de_cabecera(ruta: Path) -> set[str]:
+    """Paquetes que el modulo importa al cargarse, no dentro de una funcion.
+
+    Solo cuentan los del cuerpo del modulo: un import dentro de ``def`` se
+    ejecuta cuando alguien llama, y ese si se puede capturar y explicar.
+    """
+    arbol = ast.parse(ruta.read_text(encoding="utf-8"))
+    fuera: set[str] = set()
+    for nodo in arbol.body:                     # <- solo el primer nivel
+        if isinstance(nodo, ast.Import):
+            for a in nodo.names:
+                fuera.add(a.name.split(".")[0])
+        elif isinstance(nodo, ast.ImportFrom) and nodo.level == 0 and nodo.module:
+            fuera.add(nodo.module.split(".")[0])
+        elif isinstance(nodo, ast.Try):
+            # Un try/except ImportError en la cabecera si vale: es la forma
+            # correcta de ofrecer algo opcional con respaldo.
+            continue
+    return fuera
+
+
+def test_no_optional_package_is_imported_at_module_level():
+    """El fallo de Render, convertido en prueba.
+
+    Un paquete opcional importado en la cabecera de cualquier modulo de
+    ``core/`` o ``app/`` impide arrancar en un servidor donde no este. Tiene que
+    ir dentro de la funcion que lo usa, o envuelto en try/except ImportError.
+    """
+    culpables: list[str] = []
+    opcionales_modulo = {ALIAS.get(p, p) for p in OPCIONALES}
+    for carpeta in ("core", "app"):
+        for f in (ROOT / carpeta).rglob("*.py"):
+            colados = _imports_de_cabecera(f) & opcionales_modulo
+            for modulo in sorted(colados):
+                culpables.append(f"{f.relative_to(ROOT)} importa {modulo}")
+    assert not culpables, (
+        "paquetes opcionales importados al cargar el modulo:\n  "
+        + "\n  ".join(culpables)
+        + "\nMuevelos dentro de la funcion que los usa."
+    )
+
+
+def test_the_app_starts_with_only_the_declared_packages():
+    """Arranca la aplicacion fingiendo que los opcionales no estan instalados.
+
+    Es la comprobacion de extremo a extremo del fallo: se importan todos los
+    modulos del nucleo y ``app.main`` en un proceso aparte donde importar
+    scikit-learn lanza ImportError, igual que en Render.
+    """
+    opcionales = sorted({ALIAS.get(p, p) for p in OPCIONALES})
+    guion = textwrap.dedent(f"""
+        import importlib, pkgutil, sys
+        from pathlib import Path
+
+        RAIZ = Path({str(ROOT)!r})
+        sys.path.insert(0, str(RAIZ))
+        sys.path.insert(0, str(RAIZ / "core"))
+
+        BLOQUEADOS = {opcionales!r}
+
+        # Hace desaparecer los paquetes opcionales de este proceso.
+        class Veto:
+            def find_module(self, nombre, ruta=None):
+                return self.find_spec(nombre, ruta)
+            def find_spec(self, nombre, ruta=None, destino=None):
+                if nombre.split(".")[0] in BLOQUEADOS:
+                    raise ImportError(f"sin {{nombre}} (simulado)")
+                return None
+
+        for nombre in list(sys.modules):
+            if nombre.split(".")[0] in BLOQUEADOS:
+                del sys.modules[nombre]
+        sys.meta_path.insert(0, Veto())
+
+        import hydrochem
+        for info in pkgutil.walk_packages(hydrochem.__path__, "hydrochem."):
+            importlib.import_module(info.name)
+        import app.main
+
+        # Y la pantalla que usa el paquete que falta responde, sin reventar.
+        from hydrochem.chemistry import multivariate
+        import pandas as pd
+        r = multivariate.run_pca_and_clustering(
+            pd.DataFrame({{"Ca_mgL": [1.0, 2.0, 3.0, 4.0],
+                          "Mg_mgL": [0.5, 1.5, 2.5, 3.5],
+                          "Na_mgL": [2.0, 1.0, 4.0, 3.0]}}))
+        assert r["status"] == "unavailable", r
+        assert "scikit-learn" in r["message"]
+        assert multivariate.available() is False
+        print("OK")
+    """)
+    proceso = subprocess.run(
+        [sys.executable, "-c", guion], capture_output=True, text=True, cwd=str(ROOT)
+    )
+    assert proceso.returncode == 0, (
+        "la aplicacion no arranca sin los paquetes opcionales:\n"
+        + proceso.stdout + proceso.stderr
+    )
+    assert "OK" in proceso.stdout
+
+
+def test_multivariate_says_so_instead_of_crashing():
+    """Con o sin scikit-learn, esta funcion devuelve siempre la misma forma."""
+    import pandas as pd
+
+    from hydrochem.chemistry import multivariate
+
+    r = multivariate.run_pca_and_clustering(
+        pd.DataFrame({"Ca_mgL": [1.0, 2.0, 3.0, 4.0],
+                      "Mg_mgL": [0.5, 1.5, 2.5, 3.5],
+                      "Na_mgL": [2.0, 1.0, 4.0, 3.0]}))
+    for clave in ("status", "message", "samples", "loadings", "explained_variance"):
+        assert clave in r or r["status"] == "ok", clave
+    assert r["status"] in ("ok", "unavailable", "insufficient")
 
 
 # -- coherencia general -----------------------------------------------------
