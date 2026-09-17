@@ -586,3 +586,131 @@ td.imp { font-style: italic; color: var(--warn); }
 }
 .drop-error b { font-weight: 650; }
 .drop.rejected { border-color: var(--err); background: var(--err-soft); }
+
+/* ------------- las dos plantillas, con su diferencia explicada -------------
+
+   Se ensenan juntas a proposito: la duda de la gente no es "donde bajo la
+   plantilla" sino "cual de las dos me toca". Poner solo el enlace no resuelve
+   eso; hay que decir para que sirve cada una.                                */
+
+.guide-templates {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 14px;
+}
+.guide-templates a {
+  display: block;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.guide-templates a:hover,
+.guide-templates a:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  transform: translateY(-1px);
+}
+.guide-templates b {
+  display: block;
+  font-size: 13.5px;
+  color: var(--accent-ink);
+  margin-bottom: 3px;
+}
+.guide-templates b::after { content: ' ↓'; font-weight: 400; }
+.guide-templates span {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* ---------------- descarga de figuras ----------------
+
+   El boton vive dentro de la cabecera de cada grafico, asi que tiene que
+   pesar poco: sin relleno de color, del tamano de los controles vecinos.   */
+
+.btn-fig {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: .02em;
+  text-transform: none;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.btn-fig:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+.btn-fig:disabled { opacity: .45; cursor: not-allowed; }
+.btn-fig span { font-size: 13px; line-height: 1; }
+
+.figuras-lista {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  margin-top: 12px;
+}
+.fig-item {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.fig-item:hover { border-color: var(--accent); background: var(--accent-tint); }
+.fig-item b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--accent-ink);
+  margin-bottom: 2px;
+}
+.fig-item span {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+/* La que no se puede dibujar sigue en la lista, apagada y con el motivo: que
+   falte sin explicacion es lo que hace pensar que la aplicacion esta rota. */
+.fig-item.no { cursor: default; background: var(--surface-2); border-style: dashed; }
+.fig-item.no b { color: var(--ink-3); font-weight: 600; }
+
+/* ---------------- diagramas de Stiff sobre el mapa ----------------
+
+   El divIcon de Leaflet trae fondo y borde propios; aqui estorban, porque el
+   halo blanco del SVG ya resuelve el contraste sobre la ortofoto.            */
+
+.stiff-marker {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  /* El SVG no debe capturar el raton por su caja: solo por el dibujo, o los
+     marcadores vecinos quedarian inalcanzables bajo un rectangulo invisible. */
+  pointer-events: none;
+}
+.stiff-marker svg { overflow: visible; pointer-events: none; }
+.stiff-marker svg polygon,
+.stiff-marker svg circle,
+.stiff-marker svg line { pointer-events: auto; }
+.stiff-marker.sel svg { filter: drop-shadow(0 1px 3px rgba(22, 36, 29, .45)); }

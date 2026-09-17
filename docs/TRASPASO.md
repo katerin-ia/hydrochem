@@ -183,14 +183,81 @@ Límites en Render (512 MB): `HC_MAX_SESSIONS=12`, `HC_SESSION_TTL_MIN=45`, `HC_
 | `tests/fixtures/amargosa_90.csv` | **Real.** Extraído del anterior, con las columnas Q y R–Z |
 | `data/samples/EJEMPLO-PRUEBA-LimaSur.xlsx` | **Inventado.** 15 estaciones × 3 campañas, UTM 18S, cabeceras en castellano, valores censurados. Para probar todo |
 | `data/samples/DEMO-SINTETICO-campanas.csv` | **Inventado.** 8 campañas para el módulo temporal |
+| `/api/template` y `/api/template?kind=campaigns` | **Generadas al vuelo** por `core/hydrochem/io/template.py`. No hay archivo en disco: se construyen en cada descarga, así nunca se desincronizan del mapeo de columnas |
 
 Los inventados se regeneran con `python tools/make_test_workbook.py` y `python tools/make_demo_campaigns.py`. Ambos tienen semilla fija.
+
+## 8 bis. Figuras, plantillas y el mapa de Stiff
+
+Añadido después del despliegue. Tres cosas que conviene no deshacer sin entender por qué están.
+
+### Las dos plantillas (`core/hydrochem/io/template.py`)
+
+`simple` es una fila por punto. `campaigns` repite la misma estación en varias fechas.
+La segunda existe porque **la gente monta las campañas en ancho** —una columna `Ca marzo`,
+otra `Ca setiembre`— y en ese formato no se puede analizar nada: la aplicación no sabría que
+son el mismo parámetro en dos momentos. La plantilla trae el ejemplo ya montado en largo
+(2 estaciones × 3 fechas) y una hoja `LEEME` que lo dice con todas las letras.
+
+`tests/test_template.py` **genera la plantilla y la lee con el lector de verdad**. No basta con
+comprobar que el archivo existe: si un día cambian los nombres que reconoce el mapeo automático
+y la plantilla se queda atrás, el usuario rellena el archivo que le dimos y no se le detectan
+las columnas.
+
+### El paquete de figuras (`core/hydrochem/report/figures.py`)
+
+Diez figuras en PNG a 200 ppp, con matplotlib, en el servidor. Endpoints:
+`/api/figures` (qué sale y qué no, con el motivo), `/api/figure/<clave>.png`, `/api/export/figures.zip`.
+
+- **No duplica geometría.** Consume las mismas coordenadas que el navegador. Lo propio de este
+  módulo es solo el estilo.
+- **Una figura que no se puede dibujar se declara imposible antes de intentarlo** (`blocked_by`),
+  con el motivo escrito. Sale en la lista de exportación apagada y en el `LEEME.txt` del ZIP.
+  Nunca un PNG en blanco.
+- **Una figura rota no tumba el paquete**: se omite y el motivo va al LEEME.
+- Se dibuja en el servidor y no con `Plotly.toImage` a propósito: así el botón de cada gráfico y
+  el ZIP entregan la misma imagen, y sale a resolución de imprenta y no a la de la pantalla
+  de turno. El precio, dicho en la interfaz: **la figura no recoge la selección ni el «color por»
+  que tengas en pantalla**.
+- Las de evolución degradan con honradez cuando hay más estaciones que colores: primero colorean
+  por grupo, y si ni eso, dibujan todas en gris con la mediana encima. **Nunca reciclan la paleta**:
+  dos líneas del mismo color serían una leyenda que miente.
+
+### Los diagramas de Stiff en el mapa
+
+El usuario lo pidió «como el de Colab». Se dibujan con **SVG en el navegador** (`stiffIconSvg`),
+no con PNG del servidor: el KMZ usa PNG porque Google Earth no admite SVG en un `Placemark`,
+pero el navegador sí, y evita 90 peticiones.
+
+**Lo que costó acertar fue el tamaño.** El primer intento usaba una caja fija con el eje estirado
+hasta la muestra más concentrada (16,6 meq/L en el conjunto de referencia). Como el resto anda por
+1–2 meq/L, ochenta y nueve marcadores salían como una raya vertical dentro de un rectángulo vacío.
+La solución es **símbolo proporcional**: una sola regla de píxeles por meq/L, calibrada con el
+percentil 90 y no con el máximo, y cada icono ocupa lo que pide su dato. La comparación entre
+puntos se conserva —es la misma regla para todos— y además la forma se lee. La línea bajo el mapa
+anuncia la regla (`1 meq/L ≈ N px`), porque si no se dice, un diagrama grande no significa nada.
+
+El selector **Escala** ofrece «por grupo» para conjuntos donde un grupo entero está poco
+mineralizado; cuando está activo la nota avisa de que los tamaños ya solo se pueden comparar
+dentro de cada grupo.
+
+El **halo blanco** bajo el contorno no es decoración: sin él la línea de color desaparece sobre
+la ortofoto según el terreno.
+
+### De paso, un fallo previo
+
+Cualquier repintado general (seleccionar una muestra, cambiar el «color por») le pasaba
+`S.mapColorBy` a **todos** los mapas, así que el de fluoruro perdía su semáforo y se quedaba
+coloreado por facies con la leyenda equivocada. Ahora cada mapa recuerda su criterio en
+`S.mapModes`.
 
 ## 9. Lo que falta
 
 Por orden de valor, a mi juicio:
 
 1. **Informe en PDF.** Es lo que más piden los usuarios de este tipo de herramienta.
+   Buena parte del trabajo ya está hecha: `report/figures.py` produce las figuras y
+   `quality/standards.py` las tablas. Falta el documento que las cosa.
 2. **Guardado de proyectos.** Al cerrar la sesión se pierde lo cargado. El esquema `(station_id, sampled_at)` ya está pensado para ello.
 3. **Trayectorias sobre el Piper mejoradas.** Funcionan, pero con muchas estaciones se saturan.
 4. **Tendencias estadísticas** (Mann-Kendall, Sen). Necesitan 8–10 campañas: no las construyas antes de que existan datos.

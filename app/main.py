@@ -10,7 +10,6 @@ o, en Windows, doble clic en "Abrir HydroChem.bat".
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import sys
@@ -24,8 +23,6 @@ if str(ROOT / "core") not in sys.path:
     sys.path.insert(0, str(ROOT / "core"))
 
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
 from fastapi import Cookie, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -65,8 +62,10 @@ except ImportError:  # ejecutado como script suelto
 from hydrochem.geometry import piper as piper_mod
 from hydrochem.geometry import stiff as stiff_mod
 from hydrochem.imputation.strategies import ImputationMethod
+from hydrochem.io.template import build_template, filename as template_filename
 from hydrochem.io.column_mapping import BY_KEY, SCHEMA, ColumnMapping
 from hydrochem.pipeline import AnalysisOptions, Dataset, analyse
+from hydrochem.report import figures as fig_mod
 from hydrochem import temporal as temporal_mod
 from hydrochem.chemistry import multivariate as multi_mod
 from hydrochem.chemistry import equilibrium as eq_mod
@@ -721,49 +720,6 @@ def _stem(ds: Dataset) -> str:
     return (ds.source.rsplit(".", 1)[0] or "hydrochem").replace(" ", "_")
 
 
-def _template_workbook() -> bytes:
-    """Crea una plantilla pequeña y explicada para la primera carga."""
-    headers = [
-        "Codigo de estacion", "Grupo", "Fecha de muestreo", "Latitud", "Longitud",
-        "pH", "TDS (mg/L)", "Calcio (mg/L)", "Magnesio (mg/L)",
-        "Sodio (mg/L)", "Potasio (mg/L)", "Bicarbonato (mg/L)",
-        "Carbonato (mg/L)", "Sulfato (mg/L)", "Cloruro (mg/L)",
-        "Fluoruro (mg/L)", "Nitrato (mg/L)",
-    ]
-    notes = [
-        "Identificador unico", "Zona, acuifero o campana", "AAAA-MM-DD (opcional)",
-        "Grados WGS84 o norte UTM", "Grados WGS84 o este UTM", "Opcional", "Opcional",
-        "Ion mayoritario", "Ion mayoritario", "Ion mayoritario", "Ion mayoritario",
-        "Ion mayoritario", "Opcional", "Ion mayoritario", "Ion mayoritario",
-        "Opcional; se compara con OMS", "Opcional",
-    ]
-    example = [
-        "PZ-01", "Sector norte", "2026-01-15", -12.0464, -77.0428, 7.3, 420,
-        68.2, 14.5, 52.1, 3.8, 185.0, 0.0, 48.0, 37.0, 0.7, 4.2,
-    ]
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Datos"
-    dark = PatternFill("solid", fgColor="18243B")
-    soft = PatternFill("solid", fgColor="F8F0DB")
-    for col, (header, note, value) in enumerate(zip(headers, notes, example), 1):
-        head = ws.cell(1, col, header)
-        head.fill = dark
-        head.font = Font(color="FFFDF7", bold=True)
-        head.alignment = Alignment(horizontal="center", wrap_text=True)
-        desc = ws.cell(2, col, note)
-        desc.fill = soft
-        desc.alignment = Alignment(wrap_text=True)
-        ws.cell(3, col, value)
-        ws.column_dimensions[head.column_letter].width = max(15, min(25, len(header) + 4))
-    ws.freeze_panes = "A2"
-    ws.row_dimensions[1].height = 32
-    ws.row_dimensions[2].height = 30
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
-
-
 def _project_document(ds: Dataset) -> dict:
     """Formato portable de HydroChem: datos de entrada, mapeo y opciones.
 
@@ -789,12 +745,23 @@ def _project_document(ds: Dataset) -> dict:
 
 
 @app.get("/api/template")
-def template() -> Response:
-    """Plantilla Excel con cabeceras que la deteccion reconoce sin ajustes."""
+def template(kind: str = "simple") -> Response:
+    """Plantilla Excel con cabeceras que la deteccion reconoce sin ajustes.
+
+    :param kind: ``simple`` (una fila por punto) o ``campaigns`` (varias fechas
+        por punto, que es lo que necesita el analisis temporal).
+    """
+    try:
+        book = build_template(kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(
-        _template_workbook(),
+        book,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="plantilla_hydrochem.xlsx"'},
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{template_filename(kind)}"'
+        },
     )
 
 
@@ -837,6 +804,53 @@ async def import_project(request: Request, file: UploadFile = File(...)) -> JSON
     name = str(document.get("source") or "proyecto_hydrochem")
     return _run(session, frame, _options_from(document.get("options") or {}),
                 mapping=mapping, display_name=name)
+
+
+@app.get("/api/figures")
+def figures_index(request: Request) -> dict:
+    """Que figuras se pueden dibujar con estos datos, y por que no las demas.
+
+    La interfaz lo usa para no ofrecer un boton que solo puede fallar: si no
+    hay fechas, la evolucion aparece explicada y desactivada, no rota.
+    """
+    ds = _require_dataset(request)
+    return {"figures": fig_mod.available(ds), "stem": _stem(ds)}
+
+
+@app.get("/api/figure/{key}.png")
+def figure_png(request: Request, key: str) -> Response:
+    """Una figura suelta, en PNG a 200 ppp con fondo blanco."""
+    ds = _require_dataset(request)
+    try:
+        data = fig_mod.render(ds, key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    nombre = f"{_stem(ds)}_{fig_mod.BY_KEY[key].filename}"
+    return Response(
+        data,
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
+@app.get("/api/export/figures.zip")
+def export_figures(request: Request) -> Response:
+    """Todas las figuras que se puedan dibujar, con un LEEME que las explica.
+
+    Se generan en el servidor con matplotlib y no en el navegador: asi salen a
+    200 ppp, con fondo blanco y el mismo aspecto que las del notebook, en vez de
+    una captura del lienzo a la resolucion que tenga la pantalla de turno.
+    """
+    ds = _require_dataset(request)
+    data = fig_mod.render_all(ds)
+    return Response(
+        data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{_stem(ds)}_figuras.zip"'
+        },
+    )
 
 
 @app.get("/api/export/phreeqc")

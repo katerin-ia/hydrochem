@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HydroChem</title>
 <link rel="stylesheet" href="/vendor/leaflet.css">
-<link rel="stylesheet" href="/static/app.css?v=1789609223">
+<link rel="stylesheet" href="/static/app.css?v=1789611005">
 </head>
 <body>
 
@@ -85,7 +85,8 @@
             <button class="btn primary" id="btn-open-2">Subir mis datos</button>
             <button class="btn" id="btn-example-2">Explorar un ejemplo</button>
             <button class="btn" id="btn-demo-2">Ver series temporales</button>
-            <a class="btn" href="/api/template" download>Descargar plantilla</a>
+            <a class="btn" href="/api/template" download>Plantilla Excel</a>
+            <a class="btn" href="/api/template?kind=campaigns" download>Plantilla por campañas</a>
             <button class="btn" id="btn-project-open">Reabrir proyecto</button>
           </div>
           <button class="drop" id="drop" type="button">
@@ -113,6 +114,16 @@
             <li><b>Deja que HydroChem reconozca</b><span>Acepta nombres en español o ingles. Si alguna columna no se detecta, podras corregirla en Datos → Columnas.</span></li>
           </ol>
           <p class="guide-tip"><b>Consejo:</b> para el mapa agrega Latitud/Longitud en WGS84 o coordenadas UTM; para evolucion agrega Fecha de muestreo o Campaña.</p>
+          <div class="guide-templates">
+            <a href="/api/template" download>
+              <b>Plantilla Excel</b>
+              <span>Una fila por punto de muestreo. Sirve para Piper, Stiff, Durov, facies y mapa.</span>
+            </a>
+            <a href="/api/template?kind=campaigns" download>
+              <b>Plantilla por campañas</b>
+              <span>La misma estacion repetida en varias fechas. Es la que habilita el analisis temporal, y trae el ejemplo ya montado para que no haya dudas de como se ordena.</span>
+            </a>
+          </div>
         </section>
       </div>
     </section>
@@ -271,10 +282,25 @@
               <option value="norm">Cumplimiento normativo</option>
             </select>
           </label>
+          <label class="control">Marcador
+            <select id="sel-marker">
+              <option value="stiff">Diagramas de Stiff</option>
+              <option value="stiff-big">Diagramas grandes</option>
+              <option value="stiff-small">Diagramas pequenos</option>
+              <option value="circle">Circulos</option>
+            </select>
+          </label>
+          <label class="control" title="La escala comun permite comparar tamanos entre todo el mapa; la de grupo hace legible cada forma">Escala
+            <select id="sel-stiff-scale">
+              <option value="all">Comun a todas</option>
+              <option value="group">Por grupo</option>
+            </select>
+          </label>
           <label class="control">Coordenadas
             <select id="sel-crs"></select>
           </label>
         </header>
+        <div class="note-line" id="map-note"></div>
         <div class="body-flush"><div id="map"></div><div class="legend" id="map-legend"></div></div>
       </div>
       <div class="pane">
@@ -359,6 +385,6 @@
 
 <script src="/vendor/plotly.min.js"></script>
 <script src="/vendor/leaflet.js"></script>
-<script src="/static/app.js?v=1789609223"></script>
+<script src="/static/app.js?v=1789611005"></script>
 </body>
 </html>

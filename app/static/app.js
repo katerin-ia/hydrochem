@@ -16,10 +16,14 @@ const S = {
   stiffMode: 'group',
   maps: {},            // instancias de Leaflet por contenedor
   markers: {},         // id -> [marcadores] por contenedor
+  mapModes: {},        // criterio de color con que se pinto cada mapa
   piperDrawn: new Set(),
   zerosDecided: false,
   zerosAsMissing: [],
   durovColorBy: 'facies',
+  markerShape: 'stiff',
+  //: 'all' = una escala para todo el mapa; 'group' = una por grupo.
+  stiffScale: 'all',
   durovDrawn: false,
   showTrajectories: false,
   trajectories: null,
@@ -307,6 +311,7 @@ async function reanalyse() {
 
 function adopt(payload) {
   S.data = payload;
+  S.figuras = [];
   S.samples = payload.samples;
   S.byId = new Map(S.samples.map(s => [s.id, s]));
   S.selection.clear();
@@ -338,6 +343,8 @@ function adopt(payload) {
   renderTable('#cross-table', S.samples);
   renderValidation();
   renderExport();
+  refrescarBotonesFigura();
+  cargarFiguras();   // en segundo plano: no bloquea el dibujo
   if (S.view === 'welcome') showView('validation');
   else refreshView();
 }
@@ -1070,6 +1077,157 @@ function hexToRgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
+/* ------------------------------------------------- Stiff como marcador de mapa
+
+   Es lo que hace el notebook de Colab al exportar a Google Earth: cada punto no
+   es un circulo de color sino su propio diagrama de Stiff. Se lee la forma del
+   agua y su posicion a la vez, sin tener que ir del mapa a otra pantalla.
+
+   Aqui se dibuja con SVG en el navegador, no con imagenes del servidor. El KMZ
+   si usa PNG porque Google Earth no admite SVG en un Placemark; el navegador si,
+   y sale mas nitido, pesa nada y no hace noventa peticiones al servidor.
+
+   La decision que de verdad importa es el tamano. El primer intento usaba una
+   caja fija con el eje estirado hasta la muestra mas concentrada: como en este
+   tipo de datos una muestra suele estar muy por encima del resto, las otras
+   ochenta y nueve salian como una raya vertical dentro de un rectangulo vacio.
+
+   Asi que el marcador es de SIMBOLO PROPORCIONAL: hay una sola escala de
+   pixeles por meq/L, comun a todo el mapa, y cada icono ocupa lo que pide su
+   dato. La comparacion entre puntos se conserva intacta -es la misma regla para
+   todos- y ademas la forma se lee, porque el dibujo llena su caja.
+
+   El halo blanco bajo el contorno es lo que hace que la linea de color se vea
+   igual sobre arena clara que sobre un tejado oscuro.
+*/
+
+//: Referencias de cada tamano: pixeles de semiancho que se le dan a la muestra
+//: del percentil 90, y alto de cada fila del diagrama.
+const STIFF_ICON = {
+  'stiff-small': { objetivo: 20, fila: 11, minimo: 5 },
+  stiff: { objetivo: 32, fila: 16, minimo: 6 },
+  'stiff-big': { objetivo: 48, fila: 23, minimo: 8 }
+};
+
+function stiffMaxDeMuestra(s) {
+  let m = 0;
+  (s.stiff || []).forEach(([l, r]) => { m = Math.max(m, l ?? 0, r ?? 0); });
+  return m;
+}
+
+/* Pixeles por meq/L. Se calibra con el percentil 90 y no con el maximo: si
+   manda el maximo, una sola muestra extrema encoge a todas las demas, que es
+   justo el problema que se quiere evitar. La muestra extrema sale grande, que
+   es lo correcto, y no arrastra al resto. */
+function stiffPixelesPorMeq(muestras, objetivo) {
+  const maximos = muestras.map(stiffMaxDeMuestra).filter(v => v > 0).sort((a, b) => a - b);
+  if (!maximos.length) return 1;
+  const p90 = maximos[Math.min(maximos.length - 1, Math.floor(maximos.length * 0.9))];
+  return objetivo / p90;
+}
+
+/* Escala de los marcadores del mapa.
+
+   'all'   una sola regla de pixeles por meq/L para todo el mapa: dos puntos
+           cualesquiera se pueden comparar midiendo.
+   'group' una regla por grupo: se lee mejor un grupo poco mineralizado, pero
+           comparar tamanos entre grupos deja de valer. La nota bajo el mapa lo
+           advierte cada vez. */
+function stiffMapScales(pts, medidas) {
+  const base = pts.length ? pts : S.samples;
+  if (S.stiffScale !== 'group') {
+    const k = stiffPixelesPorMeq(base, medidas.objetivo);
+    return { por: () => k, global: k, porGrupo: null };
+  }
+  const porGrupo = new Map();
+  base.forEach(s => {
+    if (!porGrupo.has(s.group)) porGrupo.set(s.group, []);
+    porGrupo.get(s.group).push(s);
+  });
+  const ks = new Map();
+  porGrupo.forEach((muestras, g) => ks.set(g, stiffPixelesPorMeq(muestras, medidas.objetivo)));
+  const global = stiffPixelesPorMeq(base, medidas.objetivo);
+  return { por: s => ks.get(s.group) || global, global, porGrupo: ks };
+}
+
+function stiffIconSvg(s, { k, color, medidas, sel, dim }) {
+  const filas = s.stiff || [];
+  const n = filas.length;
+  if (!n) return null;
+
+  const maxFila = stiffMaxDeMuestra(s);
+  const semi = Math.max(maxFila * k, medidas.minimo);
+  const padX = 4, padY = 5;
+  const w = Math.round(semi * 2 + padX * 2);
+  const h = Math.round((n - 1) * medidas.fila + padY * 2);
+  const cx = w / 2;
+
+  const y = i => (n === 1 ? h / 2 : padY + i * medidas.fila);
+  const x = v => cx + v * k;   // una sola regla de px por meq/L
+
+  const izq = filas.map(([l], i) => [x(-(l ?? 0)), y(i)]);
+  const der = filas.map(([, r], i) => [x(r ?? 0), y(i)]);
+  const puntos = izq.concat(der.slice().reverse())
+    .map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+
+  const rejilla = filas.map((_, i) =>
+    `<line x1="${padX * 0.5}" x2="${w - padX * 0.5}" y1="${y(i).toFixed(1)}" ` +
+    `y2="${y(i).toFixed(1)}" stroke="#ffffff" stroke-opacity=".4" stroke-width="1"/>`
+  ).join('');
+
+  const vertices = izq.concat(der).map(p =>
+    `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${sel ? 2 : 1.5}" ` +
+    `fill="${color}" stroke="#ffffff" stroke-width=".8"/>`
+  ).join('');
+
+  const grosor = sel ? 2.2 : 1.5;
+  return {
+    w, h,
+    svg: `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" ` +
+      `xmlns="http://www.w3.org/2000/svg" style="opacity:${dim ? 0.35 : 1}">` +
+      rejilla +
+      `<line x1="${cx}" x2="${cx}" y1="${padY * 0.4}" y2="${h - padY * 0.4}" ` +
+      `stroke="#ffffff" stroke-opacity=".75" stroke-width="1.1"/>` +
+      // Halo: debajo del contorno de color, para que se lea sobre la ortofoto.
+      `<polygon points="${puntos}" fill="none" stroke="#ffffff" stroke-opacity=".85" ` +
+      `stroke-width="${grosor + 2.2}" stroke-linejoin="round"/>` +
+      `<polygon points="${puntos}" fill="${color}" fill-opacity="${sel ? 0.8 : 0.62}" ` +
+      `stroke="${color}" stroke-width="${grosor}" stroke-linejoin="round"/>` +
+      vertices +
+      `</svg>`
+  };
+}
+
+function stiffDivIcon(s, opciones) {
+  const dibujo = stiffIconSvg(s, opciones);
+  if (!dibujo) return null;
+  return L.divIcon({
+    html: dibujo.svg,
+    className: 'stiff-marker' + (opciones.sel ? ' sel' : ''),
+    iconSize: [dibujo.w, dibujo.h],
+    // El punto geografico cae en el eje vertical del diagrama.
+    iconAnchor: [dibujo.w / 2, dibujo.h / 2]
+  });
+}
+
+/* Ficha del globo: los mismos numeros que dibuja el marcador, para poder
+   comprobarlos sin salir del mapa. */
+function stiffTooltipHtml(s) {
+  const etiquetas = (S.data?.stiff?.labels) || [];
+  const filas = (s.stiff || []).map(([l, r], i) => {
+    const par = etiquetas[i] || ['', ''];
+    return `<tr><td style="text-align:right">${par[0] || ''}</td>` +
+      `<td style="text-align:right;padding:0 4px"><b>${fmt(l, 2)}</b></td>` +
+      `<td style="text-align:center;color:var(--ink-3)">|</td>` +
+      `<td style="padding:0 4px"><b>${fmt(r, 2)}</b></td>` +
+      `<td>${par[1] || ''}</td></tr>`;
+  }).join('');
+  return `<b>${s.station}</b><br><span style="color:var(--ink-3)">${s.group}</span>` +
+    (s.facies_label ? `<br>${s.facies_label}` : '') +
+    (filas ? `<table style="margin-top:4px;font-size:11px;border-spacing:0">${filas}</table>
+              <div style="color:var(--ink-3);font-size:10.5px">meq/L</div>` : '');
+}
+
 /* ----------------------------------------------------------------------- mapa */
 
 function ensureMap(containerId) {
@@ -1085,7 +1243,7 @@ function ensureMap(containerId) {
   setTimeout(() => map.invalidateSize(), 80);
 }
 
-function paintMarkers(containerId, mode) {
+function paintMarkers(containerId, mode, shape) {
   const map = S.maps[containerId];
   if (!map) return;
   const store = S.markers[containerId];
@@ -1095,18 +1253,52 @@ function paintMarkers(containerId, mode) {
   const pts = S.samples.filter(s => s.lon !== null && s.lat !== null);
   if (!pts.length) return;
 
+  // Solo el mapa principal ofrece los diagramas. El de fluoruro codifica un
+  // unico valor con el color, y ahi la forma del Stiff seria ruido; el de la
+  // vista cruzada es pequeno y sirve para senalar, no para leer.
+  // Se recuerda para que un repintado general (al seleccionar una muestra)
+  // no le imponga a este mapa el criterio de color de otro.
+  S.mapModes[containerId] = mode;
+  const forma = shape || (containerId === 'map' ? S.markerShape : 'circle');
+  const conStiff = forma !== 'circle' && S.data?.stiff;
+  const medidas = STIFF_ICON[forma] || STIFF_ICON.stiff;
+  const escalas = conStiff ? stiffMapScales(pts, medidas) : null;
+
   pts.forEach(s => {
     const sel = S.selection.has(s.id);
     const dim = S.selection.size > 0 && !sel;
-    const marker = L.circleMarker([s.lat, s.lon], {
-      radius: sel ? 9 : 5.5,
-      color: sel ? THEME().ink : 'rgba(22,36,29,.35)',
-      weight: sel ? 2 : 1,
-      fillColor: colorFor(s, mode),
-      fillOpacity: dim ? 0.25 : 0.9,
-      opacity: dim ? 0.3 : 1
-    });
-    marker.bindTooltip(`<b>${s.station}</b><br>${s.group}`, { direction: 'top' });
+    const color = colorFor(s, mode);
+    let marker = null;
+
+    if (conStiff) {
+      const icono = stiffDivIcon(s, {
+        k: escalas.por(s), color, sel, dim, medidas
+      });
+      // Una muestra sin filas de Stiff (le faltan iones) no puede dibujarse
+      // asi; en vez de desaparecer del mapa, cae al circulo de siempre.
+      if (icono) {
+        marker = L.marker([s.lat, s.lon], {
+          icon: icono,
+          // La seleccionada por encima: si no, queda tapada por sus vecinas.
+          zIndexOffset: sel ? 1000 : 0,
+          keyboard: false
+        });
+      }
+    }
+    if (!marker) {
+      marker = L.circleMarker([s.lat, s.lon], {
+        radius: sel ? 9 : 5.5,
+        color: sel ? THEME().ink : 'rgba(22,36,29,.35)',
+        weight: sel ? 2 : 1,
+        fillColor: color,
+        fillOpacity: dim ? 0.25 : 0.9,
+        opacity: dim ? 0.3 : 1
+      });
+    }
+
+    marker.bindTooltip(
+      conStiff ? stiffTooltipHtml(s) : `<b>${s.station}</b><br>${s.group}`,
+      { direction: 'top', opacity: 1 });
     marker.on('click', () => setSelection([s.id]));
     marker.addTo(map);
     store.set(s.id, marker);
@@ -1123,7 +1315,38 @@ function paintMarkers(containerId, mode) {
   // Cada mapa pinta su propia leyenda. Antes solo la tenia el principal, asi
   // que el mapa de fluoruro salia sin explicar sus colores.
   renderLegend(mode, containerId);
+  if (containerId === 'map') notaDelMapa(conStiff, escalas, pts.length);
 }
+
+/* La escala del Stiff se anuncia siempre. Es comun a todos los marcadores, y
+   sin decirlo nadie puede saber si un diagrama grande es agua concentrada o
+   solo un dibujo mas grande. */
+function notaDelMapa(conStiff, escalas, n) {
+  const el = $('#map-note');
+  if (!el) return;
+  if (!conStiff) {
+    el.textContent = `${n} muestras situadas. El color sigue el criterio de arriba.`;
+    return;
+  }
+  // Se anuncia cuanto mide un meq/L en pantalla: es lo que convierte los
+  // tamanos en algo que se puede comparar a ojo y no solo en algo bonito.
+  const regla = k => `1 meq/L ≈ ${fmt(k, 1)} px`;
+  const explicacion = escalas.porGrupo
+    ? `Cada punto es su propio diagrama de Stiff, con <b>una escala por grupo</b> ` +
+      `(${Array.from(escalas.porGrupo, ([g, k]) => `${g}: ${regla(k)}`).join(' · ')}). ` +
+      `Asi se lee bien la forma de los grupos poco mineralizados, pero ` +
+      `<b>los tamanos solo se pueden comparar dentro de un mismo grupo</b>.`
+    : `Cada punto es su propio diagrama de Stiff. Todos comparten la misma ` +
+      `escala (<b>${regla(escalas.global)}</b>), asi que el tamano se puede ` +
+      `comparar entre cualquier par de puntos del mapa: mas grande es mas ` +
+      `mineralizada.`;
+  el.innerHTML = explicacion +
+    ` <span style="color:var(--ink-3)">El eje vertical del diagrama pasa por la ` +
+    `coordenada de la muestra; si se solapan, acerca el zoom.</span>`;
+}
+
+
+
 
 const LEYENDAS = { map: '#map-legend', 'fluoride-map': '#fluoride-legend' };
 
@@ -1153,7 +1376,7 @@ function setSelection(ids) {
   if (S.view === 'durov') drawDurov();
   if (S.view === 'norm') drawNorm();
   if (S.view === 'fluoride') drawFluoride();
-  Object.keys(S.maps).forEach(k => paintMarkers(k, S.mapColorBy));
+  Object.keys(S.maps).forEach(k => paintMarkers(k, S.mapModes[k] || S.mapColorBy));
   markTableRows();
   renderDetail();
 
@@ -1544,6 +1767,146 @@ async function applyMapping() {
   finally { busy(false); }
 }
 
+/* ------------------------------------------------------------------ figuras
+
+   Descargar un grafico suelto, o todos en un ZIP.
+
+   Los PNG los dibuja el servidor con matplotlib, no el navegador. Podria
+   hacerse aqui con Plotly.toImage y seria instantaneo, pero saldria a la
+   resolucion de la pantalla de turno y con el aspecto del lienzo interactivo.
+   Lo que hace falta para un informe es otra cosa: 200 ppp, fondo blanco,
+   titulo y leyenda. Ademas asi el boton de cada grafico y el ZIP entregan
+   exactamente la misma imagen, que es lo que uno espera.
+
+   Contrapartida honesta: la figura descargada NO lleva la seleccion ni el
+   "color por" que tengas puesto en pantalla; es la figura completa del
+   conjunto. Se avisa en la vista de exportacion.
+*/
+
+//: Que figura le corresponde a cada vista. Algunas dependen de un control,
+//: asi que es una funcion y no un valor fijo.
+const FIGURA_DE_VISTA = {
+  piper: () => 'piper',
+  stiff: () => 'stiff',
+  durov: () => 'durov',
+  norm: () => 'normas',
+  fluoride: () => 'fluoruro',
+  validation: () => 'balance',
+  temporal: () => ($('#sel-temporal-mode')?.value === 'stiff'
+    ? 'temporal_stiff' : 'temporal_vertices')
+};
+
+function figuraInfo(key) {
+  return (S.figuras || []).find(f => f.key === key) || null;
+}
+
+async function cargarFiguras() {
+  try {
+    const res = await fetch('/api/figures');
+    S.figuras = res.ok ? (await res.json()).figures : [];
+  } catch { S.figuras = []; }
+  refrescarBotonesFigura();
+  pintarListaFiguras();
+}
+
+function guardarBlob(blob, nombre) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Sin esto el blob se queda en memoria hasta que se recarga la pagina.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function nombreDeArchivo(res, porDefecto) {
+  const cab = res.headers.get('Content-Disposition') || '';
+  const m = cab.match(/filename="([^"]+)"/);
+  return m ? m[1] : porDefecto;
+}
+
+async function descargarFigura(key) {
+  if (!S.data) { toast('Primero carga unos datos.', true); return; }
+  const info = figuraInfo(key);
+  if (info && !info.available) { toast(info.reason, true); return; }
+
+  busy(true, 'Dibujando la figura...');
+  try {
+    const res = await fetch(`/api/figure/${key}.png`);
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(d.detail);
+    }
+    guardarBlob(await res.blob(), nombreDeArchivo(res, `${key}.png`));
+    toast(`${info ? info.title : key}: descargada.`);
+  } catch (e) {
+    toast(`No se pudo generar la figura. ${e.message}`, true);
+  } finally { busy(false); }
+}
+
+async function descargarTodasLasFiguras() {
+  if (!S.data) { toast('Primero carga unos datos.', true); return; }
+  const n = (S.figuras || []).filter(f => f.available).length;
+  busy(true, `Dibujando ${n || 'las'} figuras...`);
+  try {
+    const res = await fetch('/api/export/figures.zip');
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(d.detail);
+    }
+    guardarBlob(await res.blob(), nombreDeArchivo(res, 'figuras.zip'));
+    toast(`${n} figuras descargadas en un ZIP.`);
+  } catch (e) {
+    toast(`No se pudo generar el paquete. ${e.message}`, true);
+  } finally { busy(false); }
+}
+
+/* El boton se inyecta desde aqui en vez de escribirlo en cada cabecera del
+   HTML: asi la correspondencia vista -> figura vive en un solo sitio y no hay
+   que acordarse de tocar siete sitios al anadir un grafico. */
+function montarBotonesFigura() {
+  Object.keys(FIGURA_DE_VISTA).forEach(vista => {
+    const head = document.querySelector(`.view[data-view="${vista}"] .pane > header`);
+    if (!head || head.querySelector('.btn-fig')) return;
+
+    if (!head.classList.contains('controls')) {
+      head.classList.add('controls');
+      head.style.display = 'flex';
+      head.style.alignItems = 'center';
+      const hueco = document.createElement('div');
+      hueco.style.flex = '1';
+      head.appendChild(hueco);
+    }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn-fig';
+    b.dataset.figura = vista;
+    b.innerHTML = '<span aria-hidden="true">↓</span> PNG';
+    b.addEventListener('click', () => descargarFigura(FIGURA_DE_VISTA[vista]()));
+    head.appendChild(b);
+  });
+  refrescarBotonesFigura();
+}
+
+/* Un boton que solo puede fallar es peor que un boton ausente: si la figura no
+   se puede dibujar (por ejemplo, evolucion sin fechas) se desactiva y el motivo
+   queda en el tooltip. */
+function refrescarBotonesFigura() {
+  document.querySelectorAll('.btn-fig').forEach(b => {
+    const key = FIGURA_DE_VISTA[b.dataset.figura]();
+    const info = figuraInfo(key);
+    const hayDatos = Boolean(S.data);
+    const ok = hayDatos && (!info || info.available);
+    b.disabled = !ok;
+    b.title = !hayDatos ? 'Carga datos para poder descargar figuras.'
+      : ok ? `Descargar "${info ? info.title : key}" en PNG a 200 ppp`
+        : (info.reason || 'No disponible con estos datos.');
+  });
+}
+
+
 /* -------------------------------------------------------------- exportacion */
 
 function renderExport() {
@@ -1574,13 +1937,46 @@ function renderExport() {
       círculos de color en vez de diagramas. El <b>GeoJSON</b> es el que abre QGIS.</p>`
       : sinCoords}
 
+    <h4 style="margin:20px 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)">Figuras</h4>
+    <div class="controls">
+      <button class="btn primary" id="btn-zip-figuras">Todas las figuras (.zip)</button>
+    </div>
+    <p style="color:var(--ink-3);font-size:12px;margin-top:6px">
+      PNG a 200 ppp con fondo blanco, listos para pegar en un informe sin
+      reescalar. Dentro va un <b>LEEME</b> con las opciones usadas y, si alguna
+      figura no sale, el motivo. Cada grafico tiene ademas su propio boton
+      <b>↓ PNG</b> arriba a la derecha.<br>
+      La figura descargada es la del conjunto completo: no recoge la seleccion
+      ni el «color por» que tengas puesto en pantalla.</p>
+    <div id="figuras-lista" class="figuras-lista"></div>
+
     <h4 style="margin:20px 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)">Todavía no disponible</h4>
     <p style="color:var(--ink-3)">Informe en PDF y guardado de proyectos.</p>`;
+
+  $('#btn-zip-figuras').addEventListener('click', descargarTodasLasFiguras);
+  pintarListaFiguras();
+}
+
+/* Una fila por figura, con su propio enlace. Es donde se ve de un vistazo
+   que hay y que falta, sin tener que recorrer las siete vistas. */
+function pintarListaFiguras() {
+  const caja = $('#figuras-lista');
+  if (!caja) return;
+  const figs = S.figuras || [];
+  if (!figs.length) { caja.innerHTML = ''; return; }
+  caja.innerHTML = figs.map(f => f.available
+    ? `<button type="button" class="fig-item" data-key="${f.key}">
+         <b>${f.title}</b><span>${f.filename}</span></button>`
+    : `<div class="fig-item no"><b>${f.title}</b><span>${f.reason}</span></div>`
+  ).join('');
+  caja.querySelectorAll('.fig-item[data-key]').forEach(b =>
+    b.addEventListener('click', () => descargarFigura(b.dataset.key)));
 }
 
 /* -------------------------------------------------------------------- eventos */
 
 function wire() {
+  montarBotonesFigura();
   $('#rail').addEventListener('click', ev => {
     const b = ev.target.closest('button');
     if (b && !b.disabled) showView(b.dataset.view);
@@ -1615,6 +2011,14 @@ function wire() {
   $('#sel-standard').addEventListener('change', reanalyse);
   $('#sel-crs').addEventListener('change', reanalyse);
   $('#sel-normparam').addEventListener('change', drawNorm);
+  $('#sel-stiff-scale').addEventListener('change', ev => {
+    S.stiffScale = ev.target.value;
+    paintMarkers('map', $('#sel-mapcolor').value);
+  });
+  $('#sel-marker').addEventListener('change', ev => {
+    S.markerShape = ev.target.value;
+    paintMarkers('map', $('#sel-mapcolor').value);
+  });
   $('#sel-durovcolor').addEventListener('change', ev => {
     S.durovColorBy = ev.target.value; drawDurov();
   });
@@ -1641,10 +2045,14 @@ function wire() {
   });
   $('#sel-mapcolor').addEventListener('change', ev => {
     S.mapColorBy = ev.target.value;
-    Object.keys(S.maps).forEach(k => paintMarkers(k, S.mapColorBy));
+    ['map', 'map2'].forEach(k => {
+      if (S.maps[k]) paintMarkers(k, S.mapColorBy);
+    });
   });
   $('#sel-colorby').value = S.colorBy;
   $('#sel-mapcolor').value = S.mapColorBy;
+  $('#sel-marker').value = S.markerShape;
+  $('#sel-stiff-scale').value = S.stiffScale;
   $('#sel-station').addEventListener('change', drawTemporal);
   $('#sel-temporal-mode').addEventListener('change', drawTemporal);
   $('#sel-stiff-mode').addEventListener('change', ev => {
