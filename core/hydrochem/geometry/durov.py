@@ -284,7 +284,7 @@ def background(layout: DurovLayout | None = None, panels: dict | None = None) ->
     ]
     # El rotulo del bicarbonato va sobre la esquina superior izquierda
     axis_labels[4] = Label(
-        -off, s + off * 2.6, _label(ANION_BASE_LOW), ha="left", va="bottom"
+        -off * 2, s + off * 4, _label(ANION_BASE_LOW), ha="right", va="bottom"
     )
 
     tick_labels: list[Label] = []
@@ -304,13 +304,17 @@ def background(layout: DurovLayout | None = None, panels: dict | None = None) ->
     if panels.get("tds", {}).get("available"):
         tds = panels["tds"]
         x0 = lay.side + lay.gap
-        axis_labels.append(Label(x0 + lay.panel / 2, s + off, "TDS (mg/L)",
+        axis_labels.append(Label(x0 + lay.panel / 2, s + off * 5, "TDS (mg/L)",
                                  ha="center", va="bottom"))
         tick_labels.append(Label(x0, -off * 0.5, f"{tds['min']:.0f}", ha="center", va="top"))
         tick_labels.append(Label(x0 + lay.panel, -off * 0.5, f"{tds['max']:.0f}",
                                  ha="center", va="top"))
 
-    return DurovBackground(outlines, grid, axis_labels, tick_labels, lay.bounds)
+    # Reserve space only for panels actually present, including their labels.
+    xs = [x for poly in outlines for x, _ in poly] + [label.x for label in axis_labels + tick_labels]
+    ys = [y for poly in outlines for _, y in poly] + [label.y for label in axis_labels + tick_labels]
+    bounds = (min(xs) - 0.18, min(ys) - 0.12, max(xs) + 0.18, max(ys) + 0.12)
+    return DurovBackground(outlines, grid, axis_labels, tick_labels, bounds)
 
 
 def axis_titles() -> dict[str, str]:

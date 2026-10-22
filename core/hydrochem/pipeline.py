@@ -11,7 +11,7 @@ variables globales (riesgo R11): aqui todo son parametros y valores devueltos.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pandas as pd
@@ -55,7 +55,7 @@ class AnalysisOptions:
     #: Esquema de clasificacion hidroquimica.
     facies_scheme: str = facies_mod.DEFAULT_SCHEME
     #: Umbrales normativos con los que comprobar las excedencias.
-    standard: str = std_mod.DEFAULT_STANDARD
+    standard: str | std_mod.Standard = std_mod.DEFAULT_STANDARD
     #: Sistema de coordenadas de la entrada. ``None`` = deducirlo del rango, que
     #: es solo una sugerencia; el usuario deberia confirmarlo.
     crs: str | None = None
@@ -71,7 +71,12 @@ class AnalysisOptions:
             "cbe_acceptable_pct": self.cbe_acceptable_pct,
             "cbe_marginal_pct": self.cbe_marginal_pct,
             "facies_scheme": self.facies_scheme,
-            "standard": self.standard,
+            "standard": (
+                self.standard.key if isinstance(self.standard, std_mod.Standard)
+                and std_mod.STANDARDS.get(self.standard.key) == self.standard
+                else self.standard.to_dict() if isinstance(self.standard, std_mod.Standard)
+                else self.standard
+            ),
             "crs": self.crs,
         }
 
@@ -166,7 +171,7 @@ class Dataset:
 
 
 def analyse(
-    source: str | Path | pd.DataFrame,
+    source: str | Path | pd.DataFrame | ReadResult,
     options: AnalysisOptions | None = None,
     mapping: ColumnMapping | None = None,
     sheet: str | int | None = None,
@@ -184,7 +189,9 @@ def analyse(
         name = "(DataFrame)"
         notes: list[str] = []
     else:
-        read_result = read_table(source, sheet=sheet, mapping=mapping)
+        read_result = (replace(source, mapping=mapping or source.mapping)
+                       if isinstance(source, ReadResult)
+                       else read_table(source, sheet=sheet, mapping=mapping))
         mapping = read_result.mapping
         canonical = mapping.apply(read_result.data)
         name = read_result.source
@@ -278,6 +285,20 @@ def analyse(
     return Dataset(work, report, mapping, opts, name, read_result, imputation, censoring)
 
 
+def with_standard(ds: Dataset, standard: str | std_mod.Standard) -> Dataset:
+    """Reevaluate limits without rereading Excel or recomputing chemistry."""
+    from copy import deepcopy
+    from dataclasses import replace
+    opts = replace(ds.options, standard=std_mod.get_standard(standard))
+    report = deepcopy(ds.report)
+    report.issues = [issue for issue in report.issues
+                     if issue.code not in {"excede_umbral", "estandar_sin_cotejar"}]
+    data = ds.data.drop(columns=[c for c in ds.data if c.endswith("__exceeds")])
+    data = std_mod.add_compliance(data, opts.standard)
+    _report_compliance(data, opts, report)
+    return replace(ds, data=data, options=opts, report=report)
+
+
 def _report_compliance(
     df: pd.DataFrame, opts: AnalysisOptions, report: ValidationReport
 ) -> None:
@@ -288,9 +309,8 @@ def _report_compliance(
     if not std.verified:
         report.add(
             Severity.WARNING, "estandar_sin_cotejar",
-            f"Los umbrales de {std.name_es} son una plantilla sin cotejar con el "
-            "texto oficial.",
-            hint="Verifica cada cifra antes de usarla en un informe.",
+            f"{std.name_es}: {std.source}",
+            hint="Estos criterios de comparación no certifican la potabilidad del agua.",
         )
     tabla = std_mod.check(df, std)
     for _, row in tabla.iterrows():

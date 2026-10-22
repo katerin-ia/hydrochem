@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 
 import pandas as pd
 
@@ -59,6 +60,7 @@ class Limit:
     maximum: float | None = None
     minimum: float | None = None
     note: str = ""
+    source_url: str = ""
 
     def exceeds(self, values: pd.Series) -> pd.Series:
         """Serie booleana de incumplimientos. Los ausentes no incumplen."""
@@ -86,6 +88,7 @@ class Limit:
             "kind": self.kind.value, "kind_label": self.kind.label_es,
             "maximum": self.maximum, "minimum": self.minimum,
             "range_text": self.range_text, "note": self.note,
+            "source_url": self.source_url,
         }
 
 
@@ -99,6 +102,7 @@ class Standard:
     #: ``False`` = plantilla sin cotejar con el texto oficial. La interfaz avisa.
     verified: bool
     limits: tuple[Limit, ...] = field(default_factory=tuple)
+    source_url: str = ""
 
     def limit_for(self, parameter: str) -> Limit | None:
         for lim in self.limits:
@@ -115,6 +119,7 @@ class Standard:
             "key": self.key, "name": self.name_es, "source": self.source,
             "verified": self.verified,
             "limits": [lim.to_dict() for lim in self.limits],
+            "source_url": self.source_url,
         }
 
 
@@ -126,29 +131,50 @@ def _label(ion: str) -> str:
     return IONS[ion].label if ion in IONS else ion
 
 
+WHO_BASE = "https://cdn.who.int/media/docs/default-source/wash-documents/water-safety-and-quality/chemical-fact-sheets-2022/"
+PERU_SOURCE = "https://www.digesa.minsa.gob.pe/norma_consulta/Reglamento_Calidad_Agua%20D.S%20N%C2%B0031-2010-SA.pdf"
+
 WHO_DRINKING = Standard(
     key="who_drinking",
-    name_es="OMS — agua de consumo humano",
+    name_es="OMS — guías y referencias de calidad",
     source=(
         "World Health Organization, Guidelines for Drinking-water Quality, "
-        "4.ª ed. (2011) con el apendice de 2017."
+        "4.ª ed. con adendas de 2022. F y NO3: valores guía sanitarios. "
+        "Los demás son referencias de aceptabilidad u operación, no límites sanitarios."
     ),
     verified=True,
     limits=(
         Limit(_ion("F"), _label("F"), "mg/L", LimitKind.HEALTH, maximum=1.5,
-              note="Por encima, fluorosis dental y, a dosis altas, esqueletica."),
+              note="Valor guía sanitario para fluoruro.", source_url=WHO_BASE + "fluoride-fact-sheet-2022.pdf"),
         Limit(_ion("NO3"), _label("NO3"), "mg/L", LimitKind.HEALTH, maximum=50.0,
-              note="Expresado como NO3. Riesgo de metahemoglobinemia en lactantes."),
+              note="Expresado como ion NO3, no como nitrógeno. La evaluación conjunta con nitrito no está incluida.", source_url=WHO_BASE + "nitrate-and-nitrite-fact-sheet-2022.pdf"),
         Limit(_ion("Cl"), _label("Cl"), "mg/L", LimitKind.AESTHETIC, maximum=250.0,
-              note="Umbral de sabor; no hay valor guia sanitario."),
+              note="Referencia de sabor; no hay valor guía sanitario.", source_url=WHO_BASE + "chloride-fact-sheet-2022.pdf"),
         Limit(_ion("SO4"), _label("SO4"), "mg/L", LimitKind.AESTHETIC, maximum=250.0,
-              note="Umbral de sabor y efecto laxante."),
+              note="Referencia de comparación de la aplicación (250 mg/L), no límite sanitario ni umbral de efecto laxante. La OMS recomienda notificar a la autoridad por encima de 500 mg/L.", source_url=WHO_BASE + "sulfate-fact-sheet-2022.pdf"),
         Limit(_ion("Na"), _label("Na"), "mg/L", LimitKind.AESTHETIC, maximum=200.0,
-              note="Umbral de sabor."),
+              note="Referencia de sabor; no hay valor guía sanitario.", source_url=WHO_BASE + "sodium-fact-sheet-2022.pdf"),
         Limit("tds_mgl", "TDS", "mg/L", LimitKind.AESTHETIC, maximum=1000.0,
-              note="Palatabilidad; por encima de 1200 mg/L se considera desagradable."),
+              note="Referencia de comparación de la aplicación (1000 mg/L). La OMS no fija un valor guía sanitario para TDS.", source_url=WHO_BASE + "total-dissolved-solids-fact-sheet-2022.pdf"),
         Limit("ph", "pH", "u. de pH", LimitKind.OPERATIONAL, minimum=6.5, maximum=8.5,
-              note="Intervalo operativo recomendado; no es un valor guia sanitario."),
+              note="Intervalo operativo de comparación de la aplicación; la OMS no fija un valor guía sanitario ni un intervalo universal de pH.", source_url=WHO_BASE + "ph-fact-sheet-2022.pdf"),
+    ),
+)
+
+PERU_DRINKING = Standard(
+    key="peru_drinking",
+    name_es="Perú — D.S. 031-2010-SA (parámetros disponibles)",
+    source="MINSA / DIGESA, D.S. 031-2010-SA, anexos II y III, pp. 39–40. Valores cotejados con la publicación de 2011. Evalúa solo los parámetros medidos incluidos; no certifica potabilidad.",
+    verified=True,
+    source_url=PERU_SOURCE,
+    limits=(
+        Limit("F_mgL", _label("F"), "mg/L", LimitKind.HEALTH, maximum=1.0, note="Anexo III: flúor expresado como F−.", source_url=PERU_SOURCE + "#page=41"),
+        Limit("NO3_mgL", _label("NO3"), "mg/L", LimitKind.HEALTH, maximum=50.0, note="Anexo III: nitratos expresados como NO3, no como N.", source_url=PERU_SOURCE + "#page=41"),
+        Limit("Cl_mgL", _label("Cl"), "mg/L", LimitKind.AESTHETIC, maximum=250, note="Anexo II.", source_url=PERU_SOURCE + "#page=40"),
+        Limit("SO4_mgL", _label("SO4"), "mg/L", LimitKind.AESTHETIC, maximum=250, note="Anexo II.", source_url=PERU_SOURCE + "#page=40"),
+        Limit("Na_mgL", _label("Na"), "mg/L", LimitKind.AESTHETIC, maximum=200, note="Anexo II.", source_url=PERU_SOURCE + "#page=40"),
+        Limit("tds_mgl", "TDS", "mg/L", LimitKind.AESTHETIC, maximum=1000, note="Anexo II: sólidos totales disueltos.", source_url=PERU_SOURCE + "#page=40"),
+        Limit("ph", "pH", "u. de pH", LimitKind.AESTHETIC, minimum=6.5, maximum=8.5, note="Anexo II: parámetro de calidad organoléptica.", source_url=PERU_SOURCE + "#page=40"),
     ),
 )
 
@@ -173,7 +199,7 @@ PERU_DRINKING_TEMPLATE = Standard(
 )
 
 STANDARDS: dict[str, Standard] = {
-    s.key: s for s in (WHO_DRINKING, PERU_DRINKING_TEMPLATE)
+    s.key: s for s in (WHO_DRINKING, PERU_DRINKING, PERU_DRINKING_TEMPLATE)
 }
 DEFAULT_STANDARD = "who_drinking"
 
@@ -196,21 +222,50 @@ def custom_standard(name: str, limits: list[dict]) -> Standard:
 
     Pensado para que el usuario pueda cargar sus umbrales sin tocar el codigo.
     """
+    if not isinstance(limits, list) or not 1 <= len(limits) <= 30:
+        raise ValueError("Incluye entre 1 y 30 parámetros con límites.")
+    name = str(name).strip()
+    if not name or len(name) > 120:
+        raise ValueError("El nombre debe tener entre 1 y 120 caracteres.")
+    allowed = {f"{ion}_mgL" for ion in IONS} | {"tds_mgl", "ph", "temp_c", "do_mgl"}
     built: list[Limit] = []
+    seen = set()
     for raw in limits:
         param = str(raw["parameter"])
+        if param not in allowed or param in seen:
+            raise ValueError(f"Parámetro no admitido o repetido: {param}.")
+        seen.add(param)
+        bounds = {}
+        for key in ("minimum", "maximum"):
+            value = raw.get(key)
+            if value is None or value == "":
+                bounds[key] = None
+                continue
+            if isinstance(value, bool):
+                raise ValueError("Los límites deben ser números.")
+            value = float(value)
+            if not math.isfinite(value) or (param != "temp_c" and value < 0):
+                raise ValueError("Los límites deben ser finitos y las concentraciones no negativas.")
+            if param == "ph" and value > 14:
+                raise ValueError("El intervalo de pH admitido es de 0 a 14.")
+            bounds[key] = value
+        lo, hi = bounds["minimum"], bounds["maximum"]
+        if lo is None and hi is None:
+            raise ValueError(f"Indica al menos un límite para {param}.")
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError(f"El mínimo de {param} no puede superar el máximo.")
         built.append(
             Limit(
                 parameter=param,
                 label=str(raw.get("label") or param),
                 unit=str(raw.get("unit") or "mg/L"),
                 kind=LimitKind(raw.get("kind") or "health"),
-                maximum=None if raw.get("maximum") is None else float(raw["maximum"]),
-                minimum=None if raw.get("minimum") is None else float(raw["minimum"]),
+                maximum=hi,
+                minimum=lo,
                 note=str(raw.get("note") or ""),
             )
         )
-    return Standard("custom", name, "Definido por el usuario", False, tuple(built))
+    return Standard("custom", name, "Criterios definidos por el usuario; no constituyen una norma oficial.", False, tuple(built))
 
 
 # --------------------------------------------------------------------------
@@ -261,6 +316,7 @@ def check(
                 "min_observed": None if not n_measured else float(values.min()),
                 "max_observed": None if not n_measured else float(values.max()),
                 "note": lim.note,
+                "source_url": lim.source_url,
             }
         )
     return pd.DataFrame(rows)
@@ -284,12 +340,15 @@ def add_compliance(
     std = get_standard(standard)
     out = df.copy()
     cols: list[str] = []
+    measured: list[pd.Series] = []
     for lim in std.limits:
         if lim.parameter not in out.columns:
             continue
         col = f"{lim.parameter}__exceeds"
         out[col] = lim.exceeds(out[lim.parameter])
         cols.append(col)
+        measured.append(pd.to_numeric(out[lim.parameter], errors="coerce").notna())
+    out["n_evaluated"] = pd.concat(measured, axis=1).sum(axis=1).astype(int) if measured else 0
     if cols:
         out["n_exceedances"] = out[cols].sum(axis=1).astype(int)
         health = [

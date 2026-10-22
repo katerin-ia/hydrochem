@@ -163,3 +163,37 @@ def test_los_colores_no_se_reciclan_entre_grupos():
     asignados = [colores[g] for g in grupos[: len(fig_mod.PALETTE)]]
     assert len(set(asignados)) == len(asignados)
     assert all(colores[g] == fig_mod.NEUTRO for g in grupos[len(fig_mod.PALETTE):])
+
+
+def test_encabezados_del_zip_no_se_superponen():
+    from matplotlib.figure import Figure
+    original = Figure.savefig
+    checked = []
+
+    def inspect(fig, *args, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        title = fig._suptitle
+        header = getattr(fig, "_hc_header", None)
+        if title is not None and header is not None:
+            title_box = title.get_window_extent(renderer)
+            header_box = header.get_window_extent(renderer)
+            if header is not title:
+                assert header_box.y1 < title_box.y0, title.get_text()
+            for ax in fig.axes:
+                # Include subplot titles, which sit above the plotting area.
+                top = max(ax.get_window_extent(renderer).y1,
+                          ax.title.get_window_extent(renderer).y1)
+                assert top < header_box.y0, title.get_text()
+            checked.append(title.get_text())
+        return original(fig, *args, **kwargs)
+
+    Figure.savefig = inspect
+    try:
+        data = fig_mod.render_all(analyse(DEMO, AnalysisOptions(zeros_as_missing_for=("F",))))
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            assert len([n for n in archive.namelist() if n.endswith(".png")]) == 10
+            assert "fallo al dibujarla" not in archive.read("LEEME.txt").decode()
+    finally:
+        Figure.savefig = original
+    assert len(checked) == 10

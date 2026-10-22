@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HydroChem</title>
 <link rel="stylesheet" href="/vendor/leaflet.css">
-<link rel="stylesheet" href="/static/app.css?v=1789611005">
+<link rel="stylesheet" href="/static/app.css?v=20261022">
 </head>
 <body>
 
 <header>
-  <div class="brand">HydroChem <small>Analisis hidroquimico</small></div>
+  <div class="brand">HydroChem <small>Análisis hidroquímico</small></div>
   <div class="file-chip" id="file-chip" hidden><b id="file-name"></b><span id="file-meta"></span></div>
+  <span class="demo-badge" id="demo-badge" hidden>Datos sintéticos</span>
   <div class="spacer"></div>
   <input type="file" id="file-input" accept=".xlsx,.xlsm,.csv,.txt,.tsv" hidden>
   <input type="file" id="project-input" accept=".hydrochem.json,application/json" hidden>
@@ -46,7 +47,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="12" height="12"/><path d="M9 9 4 4M9 21H3M21 9V3"/></svg>
       Durov
     </button>
-    <button data-view="norm" disabled title="Umbrales normativos">
+    <button data-view="norm" disabled title="Criterios de calidad">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v18M5 8h14M7 8l-3 6h6zM17 8l-3 6h6z"/></svg>
       Normas
     </button>
@@ -62,7 +63,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 8h10M7 8l3-3M7 8l3 3M17 16H7M17 16l-3-3M17 16l-3 3"/></svg>
       Cruzado
     </button>
-    <button data-view="temporal" disabled title="Evolucion en el tiempo">
+    <button data-view="temporal" disabled title="Evolución temporal">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
       Tiempo
     </button>
@@ -77,8 +78,8 @@
     <section class="view welcome" data-view="welcome" data-active="true">
       <div class="landing-shell">
         <div class="welcome-card landing-hero">
-          <p class="eyebrow">LABORATORIO DIGITAL DE AGUAS</p>
-          <h1>Entiende la quimica de tu agua, muestra por muestra.</h1>
+          <p class="eyebrow">ANÁLISIS DE AGUA</p>
+          <h1>Análisis hidroquímico de muestras de agua</h1>
           <p>HydroChem transforma una hoja de campo en un analisis claro: valida la calidad
              de los datos, convierte unidades y conecta los diagramas con el mapa.</p>
           <div class="actions">
@@ -97,8 +98,8 @@
         </div>
 
         <section class="landing-panel" aria-labelledby="que-hace">
-          <p class="eyebrow">TODO CONECTADO</p>
-          <h2 id="que-hace">Del laboratorio al territorio</h2>
+          <p class="eyebrow">HERRAMIENTAS DE ANÁLISIS</p>
+          <h2 id="que-hace">Datos, diagramas y ubicación</h2>
           <div class="feature-grid">
             <article class="feature-card"><span aria-hidden="true">01</span><h3>Revisa</h3><p>Detecta columnas, valores faltantes y balance ionico antes de interpretar.</p></article>
             <article class="feature-card"><span aria-hidden="true">02</span><h3>Interpreta</h3><p>Explora facies, Piper, Stiff, Durov, normas y cambios entre campañas.</p></article>
@@ -150,7 +151,7 @@
     <!-- VALIDACION -->
     <section class="view" data-view="validation" style="grid-template-columns:1fr;padding:10px">
       <div class="pane">
-        <header>Informe de validacion</header>
+        <header>Informe de validación</header>
         <div class="body-scroll" id="validation-body"></div>
       </div>
     </section>
@@ -211,7 +212,7 @@
     <section class="view" data-view="durov" style="grid-template-columns:1fr 300px;gap:10px;padding:10px">
       <div class="pane">
         <header class="controls" style="display:flex;align-items:center">
-          <span>Diagrama de Durov ampliado</span>
+          <span>Diagrama de Durov</span>
           <div style="flex:1"></div>
           <label class="control">Color por
             <select id="sel-durovcolor">
@@ -235,7 +236,7 @@
     <section class="view" data-view="norm" style="grid-template-columns:1fr;padding:10px">
       <div class="pane">
         <header class="controls" style="display:flex;align-items:center">
-          <span>Umbrales normativos</span>
+          <span>Criterios de calidad</span>
           <div style="flex:1"></div>
           <label class="control">Norma
             <select id="sel-standard"></select>
@@ -243,6 +244,7 @@
           <label class="control">Parámetro
             <select id="sel-normparam"></select>
           </label>
+          <button class="btn" id="btn-criteria">Editar límites…</button>
         </header>
         <div class="note-line" id="norm-note"></div>
         <div class="body-scroll" id="norm-body"></div>
@@ -258,11 +260,11 @@
       </div>
       <div class="pane">
         <header>Fluoruro frente a calcio</header>
-        <div class="note-line">Cada punto es una muestra; la linea marca la guia OMS de 1,5 mg/L.</div>
+        <div class="note-line" id="fluoride-reference">Cada punto representa una muestra con fluoruro y calcio medidos.</div>
         <div class="body-flush"><div class="plot" id="fluoride-scatter"></div></div>
       </div>
       <div class="pane" style="grid-column:1 / -1">
-        <header>Distribucion espacial de fluoruro</header>
+        <header>Distribución espacial de fluoruro</header>
         <div class="body-flush"><div id="fluoride-map"></div><div class="legend" id="fluoride-legend"></div></div>
       </div>
     </section>
@@ -331,16 +333,16 @@
     <section class="view" data-view="temporal" style="grid-template-columns:1fr;padding:10px">
       <div class="pane">
         <header class="controls" style="display:flex;align-items:center">
-          <span>Evolucion en el tiempo</span>
+          <span>Evolución temporal</span>
           <div style="flex:1"></div>
           <label class="control">Estacion
             <select id="sel-station"></select>
           </label>
           <label class="control">Mostrar
             <select id="sel-temporal-mode">
-              <option value="vertices">Vertices del Piper (%)</option>
-              <option value="stiff">Filas del Stiff (meq/L)</option>
-              <option value="params">Parametros fisico-quimicos</option>
+              <option value="vertices">Composición iónica del Piper (%)</option>
+              <option value="stiff">Concentraciones del Stiff (meq/L)</option>
+              <option value="params">Parámetros fisicoquímicos</option>
               <option value="trends">Tendencias Mann-Kendall / Sen</option>
             </select>
           </label>
@@ -371,6 +373,20 @@
       </div>
     </div>
 
+    <div class="sheet" id="criteria-sheet" role="dialog" aria-modal="true" aria-labelledby="criteria-title" hidden>
+      <div class="sheet-card">
+        <header><b id="criteria-title">Límites personalizados</b><div style="flex:1"></div>
+          <button class="btn" id="criteria-close">Cancelar</button>
+          <button class="btn primary" id="criteria-save">Aplicar y guardar</button></header>
+        <div class="sheet-note">
+          <label>Nombre <input id="criteria-name" maxlength="120" placeholder="Mis criterios de comparación"></label>
+          <p>Selecciona los parámetros y deja vacío el extremo que no corresponda. Las concentraciones se expresan en mg/L; el pH no tiene unidad.
+          Se guardan en este navegador y se aplican a las tablas, gráficas y exportaciones. Los criterios editados se identifican como personalizados.</p>
+          <p id="criteria-error" role="alert"></p>
+        </div>
+        <div class="sheet-body"><table id="criteria-table"></table></div>
+      </div>
+    </div>
     <div class="spinner" id="spinner" hidden>Calculando...</div>
   </main>
 </div>
@@ -385,6 +401,7 @@
 
 <script src="/vendor/plotly.min.js"></script>
 <script src="/vendor/leaflet.js"></script>
-<script src="/static/app.js?v=1789611005"></script>
+<script src="/static/review.js?v=20261022"></script>
+<script src="/static/app.js?v=20261022"></script>
 </body>
 </html>

@@ -63,6 +63,7 @@ class Session:
     #: que "recalcular" siga funcionando aunque ya no exista un Excel original.
     source_frame: Any = None
     source_mapping: Any = None
+    export_cache: dict = field(default_factory=dict)
     created: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
 
@@ -74,6 +75,7 @@ class Session:
         return (time.time() - self.last_seen) / 60.0
 
     def clear(self) -> None:
+        self.export_cache.clear()
         self.dataset = None
         self.source_path = None
         self.source_frame = None

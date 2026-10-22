@@ -14,6 +14,7 @@ import pandas as pd
 
 from ...chemistry import facies as facies_mod
 from ...constants import ALL_IONS, IONS
+from ...quality import standards as std_mod
 from . import kml as kml_mod
 
 LON_COL = "lon_wgs84"
@@ -93,7 +94,7 @@ def _with_coordinates(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         )
     lon = pd.to_numeric(df[LON_COL], errors="coerce")
     lat = pd.to_numeric(df[LAT_COL], errors="coerce")
-    ok = lon.notna() & lat.notna()
+    ok = lon.between(-180, 180) & lat.between(-90, 90)
     return df.loc[ok], int((~ok).sum())
 
 
@@ -126,6 +127,8 @@ def to_geojson(df: pd.DataFrame, name: str = "HydroChem", indent: int = 1) -> st
 def to_kml(
     df: pd.DataFrame, name: str = "HydroChem", group_col: str = "group",
     colour_by: str = "facies",
+    facies_scheme: str = facies_mod.DEFAULT_SCHEME,
+    standard=None,
 ) -> str:
     """KML suelto, sin imagenes: marcadores de color con la ficha en el globo.
 
@@ -138,14 +141,16 @@ def to_kml(
     if colour_by == "facies" and facies_mod.FACIES_COL in work.columns:
         keys = work[facies_mod.FACIES_COL].astype(str)
         unique = list(dict.fromkeys(keys))
-        colours = {k: facies_mod.color_of(k) for k in unique}
+        colours = {k: facies_mod.color_of(k, facies_scheme) for k in unique}
     else:
         keys = (work[group_col].astype(str) if group_col in work.columns
                 else pd.Series("Sin grupo", index=work.index))
         unique = list(dict.fromkeys(keys))
-        colours = {k: PALETTE[i % len(PALETTE)] for i, k in enumerate(unique)}
+        colours = {k: PALETTE[i] if i < len(PALETTE) else "#566e60" for i, k in enumerate(unique)}
 
     doc = kml_mod.Document(name=name, description=f"{len(work)} muestras")
+    std = std_mod.get_standard(standard) if standard else None
+    compliance = std_mod.check(work, std) if std else None
     circle = "http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png"
     for i, key in enumerate(unique):
         doc.styles.append(
@@ -164,7 +169,7 @@ def to_kml(
                     name=str(row.get("station_code", "")),
                     lon=float(row[LON_COL]),
                     lat=float(row[LAT_COL]),
-                    description_html=_popup_html(row, None, None, ""),
+                    description_html=_popup_html(row, None, compliance, std.name_es if std else ""),
                     style_id=style_of[str(keys.loc[idx])],
                 )
             )

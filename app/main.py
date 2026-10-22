@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import webbrowser
@@ -23,9 +24,10 @@ if str(ROOT / "core") not in sys.path:
     sys.path.insert(0, str(ROOT / "core"))
 
 import pandas as pd
-from fastapi import Cookie, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Cookie, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.concurrency import run_in_threadpool
 
 from hydrochem.chemistry import facies as facies_mod
 from hydrochem.chemistry.units import equivalent_weight_table
@@ -64,10 +66,9 @@ from hydrochem.geometry import stiff as stiff_mod
 from hydrochem.imputation.strategies import ImputationMethod
 from hydrochem.io.template import build_template, filename as template_filename
 from hydrochem.io.column_mapping import BY_KEY, SCHEMA, ColumnMapping
-from hydrochem.pipeline import AnalysisOptions, Dataset, analyse
+from hydrochem.pipeline import AnalysisOptions, Dataset, analyse, with_standard
 from hydrochem.report import figures as fig_mod
 from hydrochem import temporal as temporal_mod
-from hydrochem.chemistry import multivariate as multi_mod
 from hydrochem.chemistry import equilibrium as eq_mod
 
 STATIC = Path(__file__).parent / "static"
@@ -182,6 +183,7 @@ def samples_payload(ds: Dataset) -> list[dict]:
                 "facies": _clean(row.get(facies_mod.FACIES_COL)),
                 "facies_label": _clean(row.get(facies_mod.FACIES_LABEL_COL)),
                 "n_exceedances": int(row.get("n_exceedances") or 0),
+                "n_evaluated": int(row.get("n_evaluated") or 0),
                 "exceeds_health": bool(row.get("exceeds_health") or False),
                 "durov": [_clean(row.get("durov_x")), _clean(row.get("durov_y"))],
                 "irrigation": {
@@ -301,7 +303,8 @@ def _standard_payload(ds: Dataset) -> dict:
     tabla = ds.compliance
     return {
         "key": std.key, "name": std.name_es, "source": std.source,
-        "verified": std.verified,
+        "verified": std.verified, "limits": [lim.to_dict() for lim in std.limits],
+        "source_url": std.source_url,
         "rows": json.loads(tabla.to_json(orient="records")) if not tabla.empty else [],
     }
 
@@ -399,11 +402,10 @@ def dataset_payload(ds: Dataset, detected_zero_ions: list[str] | None = None) ->
         "campaigns": ds.campaigns,
         "temporal": temporal_payload(ds),
         "fluoride": _fluoride_summary(ds),
-        "multivariate": multi_mod.run_pca_and_clustering(ds.data),
         "is_synthetic_demo": ds.source == DEMO_CAMPAIGNS.name,
         "options": ds.options.to_dict(),
         "suspicious_zero_ions": detected_zero_ions if detected_zero_ions is not None
-                                else suspicious_zero_ions(ds),
+                                else sorted(set(suspicious_zero_ions(ds)) | set(ds.options.zeros_as_missing_for)),
         "zeros_as_missing_for": list(ds.options.zeros_as_missing_for),
         "report": ds.report.to_dict(),
         "summary": ds.report.summary_es(),
@@ -511,6 +513,8 @@ def _method_available(method: ImputationMethod) -> bool:
 
 
 def _options_from(payload: dict) -> AnalysisOptions:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Las opciones deben ser un objeto.")
     opts = AnalysisOptions()
     for key in (
         "ew_table", "piper_convention", "stiff_template", "imputation",
@@ -522,12 +526,21 @@ def _options_from(payload: dict) -> AnalysisOptions:
     zeros = payload.get("zeros_as_missing_for")
     if zeros is not None:
         opts.zeros_as_missing_for = tuple(zeros)
+    try:
+        if isinstance(opts.standard, dict):
+            opts.standard = std_mod.custom_standard(
+                opts.standard.get("name", "Mis criterios"), opts.standard.get("limits", [])
+            )
+        else:
+            std_mod.get_standard(opts.standard)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Límites no válidos: {exc}") from exc
     return opts
 
 
 def _run(session: Session, source, opts: AnalysisOptions, sheet=None,
          zeros_decided: bool = False, mapping: ColumnMapping | None = None,
-         display_name: str | None = None) -> JSONResponse:
+         display_name: str | None = None, cached_read=None) -> JSONResponse:
     """Analiza y devuelve el resultado.
 
     Si el usuario no ha decidido nada sobre los ceros sospechosos, se aplica la
@@ -537,11 +550,12 @@ def _run(session: Session, source, opts: AnalysisOptions, sheet=None,
     opcion que sesga el resultado.
     """
     try:
-        ds = analyse(source, opts, sheet=sheet, mapping=mapping)
+        ds = analyse(cached_read if cached_read is not None else source, opts, sheet=sheet, mapping=mapping)
         detected = suspicious_zero_ions(ds)
         if not zeros_decided and detected:
             opts.zeros_as_missing_for = tuple(detected)
-            ds = analyse(source, opts, sheet=sheet, mapping=mapping)
+            ds = analyse(ds.read_result if ds.read_result is not None else source,
+                         opts, sheet=sheet, mapping=mapping)
         elif zeros_decided:
             # La deteccion se hace sobre el dato ya convertido, asi que no
             # encuentra nada; se recuerda lo que el usuario tiene en juego.
@@ -553,6 +567,7 @@ def _run(session: Session, source, opts: AnalysisOptions, sheet=None,
     if display_name:
         ds.source = display_name
     session.dataset = ds
+    session.export_cache.clear()
     if isinstance(source, pd.DataFrame):
         session.source_frame = source.copy()
         session.source_path = None
@@ -579,7 +594,8 @@ def load_example(request: Request, payload: dict | None = None) -> JSONResponse:
 
 
 @app.post("/api/upload")
-async def upload(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+async def upload(request: Request, file: UploadFile = File(...),
+                 analysis_options: str = Form("{}")) -> JSONResponse:
     """Recibe un archivo del usuario, comprobandolo antes de guardarlo."""
     session = _session(request)
     # Se lee con tope: asi un archivo enorme no llena la memoria del servidor
@@ -589,7 +605,15 @@ async def upload(request: Request, file: UploadFile = File(...)) -> JSONResponse
         dest = SESSIONS.store_upload(session, file.filename, data)
     except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _run(session, dest, AnalysisOptions())
+    # La lectura y el calculo no deben bloquear el bucle ASGI.
+    try:
+        uploaded_options = json.loads(analysis_options)
+        if not isinstance(uploaded_options, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+        opts = _options_from(uploaded_options)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Opciones de análisis no válidas.") from exc
+    return await run_in_threadpool(_run, session, dest, opts)
 
 
 @app.post("/api/reanalyse")
@@ -602,7 +626,8 @@ def reanalyse(request: Request, payload: dict) -> JSONResponse:
     payload = payload or {}
     return _run(session, source, _options_from(payload),
                 zeros_decided="zeros_as_missing_for" in payload,
-                mapping=session.source_mapping)
+                mapping=session.source_mapping,
+                cached_read=session.dataset.read_result if session.dataset else None)
 
 
 @app.post("/api/demo-campaigns")
@@ -644,13 +669,24 @@ def state(request: Request) -> JSONResponse:
     session = _session(request)
     if session.dataset is None:
         return _set_cookie(JSONResponse({"loaded": False}), session)
-    payload = dataset_payload(
-        session.dataset, detected_zero_ions=suspicious_zero_ions(session.dataset)
-    )
+    payload = dataset_payload(session.dataset)
     payload["loaded"] = True
     return _set_cookie(
         JSONResponse(json.loads(json.dumps(payload, allow_nan=False))), session
     )
+
+
+@app.post("/api/standard")
+def set_standard(request: Request, payload: dict) -> JSONResponse:
+    session = _session(request)
+    if session.dataset is None:
+        raise HTTPException(status_code=400, detail="Carga primero un archivo.")
+    opts = _options_from(payload)
+    ds = with_standard(session.dataset, opts.standard)
+    session.dataset = ds
+    session.export_cache.clear()
+    result = dataset_payload(ds)
+    return _set_cookie(JSONResponse(result), session)
 
 
 @app.post("/api/reset")
@@ -717,7 +753,8 @@ def _require_dataset(request: Request) -> Dataset:
 
 
 def _stem(ds: Dataset) -> str:
-    return (ds.source.rsplit(".", 1)[0] or "hydrochem").replace(" ", "_")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", ds.source.rsplit(".", 1)[0])
+    return name.strip("._-")[:96] or "hydrochem"
 
 
 def _project_document(ds: Dataset) -> dict:
@@ -785,7 +822,7 @@ async def import_project(request: Request, file: UploadFile = File(...)) -> JSON
         document = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail="No es un proyecto HydroChem JSON valido.") from exc
-    if document.get("format") != "hydrochem-project" or document.get("version") != 1:
+    if not isinstance(document, dict) or document.get("format") != "hydrochem-project" or document.get("version") != 1:
         raise HTTPException(status_code=400, detail="El archivo no corresponde a un proyecto HydroChem compatible.")
     records = document.get("records")
     if not isinstance(records, list) or not records:
@@ -802,7 +839,7 @@ async def import_project(request: Request, file: UploadFile = File(...)) -> JSON
         raise HTTPException(status_code=400, detail="El proyecto no trae: " + ", ".join(mapping.missing_required))
     session = _session(request)
     name = str(document.get("source") or "proyecto_hydrochem")
-    return _run(session, frame, _options_from(document.get("options") or {}),
+    return await run_in_threadpool(_run, session, frame, _options_from(document.get("options") or {}),
                 mapping=mapping, display_name=name)
 
 
@@ -867,16 +904,24 @@ def export_phreeqc(request: Request) -> Response:
 
 @app.get("/api/export/kmz")
 def export_kmz(request: Request, colour_by: str = "facies",
-               template: str | None = None) -> Response:
+               template: str | None = None, detailed: bool = False) -> Response:
     """KMZ para Google Earth, con el diagrama de Stiff como icono de cada punto."""
     ds = _require_dataset(request)
     try:
-        res = kmz_mod.build(
-            ds.data, name=_stem(ds), colour_by=colour_by,
-            stiff_template=template or ds.options.stiff_template,
-            standard=ds.options.standard,
-            filename=f"{_stem(ds)}.kmz",
-        )
+        session = _session(request)
+        cache_key = (id(ds), colour_by, template, detailed)
+        res = session.export_cache.get(cache_key)
+        if res is None:
+            res = kmz_mod.build(
+                ds.data, name=_stem(ds), colour_by=colour_by,
+                stiff_template=template or ds.options.stiff_template,
+                standard=ds.options.standard,
+                filename=f"{_stem(ds)}.kmz",
+                detailed_popups=detailed, facies_scheme=ds.options.facies_scheme,
+            )
+            if len(res.content) <= 8 * 1024 * 1024:
+                session.export_cache.clear()
+                session.export_cache[cache_key] = res
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return Response(
@@ -894,7 +939,8 @@ def export_kmz(request: Request, colour_by: str = "facies",
 def export_kml(request: Request, colour_by: str = "facies") -> Response:
     ds = _require_dataset(request)
     try:
-        texto = vec_mod.to_kml(ds.data, name=_stem(ds), colour_by=colour_by)
+        texto = vec_mod.to_kml(ds.data, name=_stem(ds), colour_by=colour_by,
+                               facies_scheme=ds.options.facies_scheme, standard=ds.options.standard)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return Response(

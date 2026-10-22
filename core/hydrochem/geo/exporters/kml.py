@@ -113,9 +113,8 @@ class IconStyle:
                 f'xunits="fraction" yunits="fraction"/>'
             )
         lines.append(f"{indent}  </IconStyle>")
-        lines.append(
-            f"{indent}  <LabelStyle><scale>{num(self.label_scale, 2)}</scale></LabelStyle>"
-        )
+        label_scale = max(self.label_scale, 0.8) if scale > self.scale else self.label_scale
+        lines.append(f"{indent}  <LabelStyle><scale>{num(label_scale, 2)}</scale></LabelStyle>")
         lines.append(f"{indent}  <BalloonStyle><text>$[description]</text></BalloonStyle>")
         lines.append(f"{indent}</Style>")
         return "\n".join(lines)
@@ -191,6 +190,7 @@ class Document:
     styles: list[IconStyle] = field(default_factory=list)
     folders: list[Folder] = field(default_factory=list)
     overlays: list[ScreenOverlay] = field(default_factory=list)
+    look_at: tuple[float, float, float] | None = None
 
     def to_xml(self) -> str:
         parts = [
@@ -202,6 +202,10 @@ class Document:
         if self.description:
             parts.append(f"    <description>{cdata(self.description)}</description>")
         parts.append("    <open>1</open>")
+        if self.look_at:
+            lon, lat, distance = self.look_at
+            parts.append(f"    <LookAt><longitude>{num(lon)}</longitude><latitude>{num(lat)}</latitude>"
+                         f"<range>{num(distance, 1)}</range><tilt>0</tilt><heading>0</heading></LookAt>")
         for style in self.styles:
             parts.append(style.to_xml())
         for overlay in self.overlays:

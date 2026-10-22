@@ -95,40 +95,48 @@ const THEME = () => ({
 /* ------------------------------------------------------------------- colores */
 
 function groupColors() {
+  if (S.groupColorCache) return S.groupColorCache;
   // Ocho tonos validados; el resto se pliega en un neutro etiquetado "Otros".
   // Generar un noveno color haria que dos grupos distintos se parecieran.
   const map = new Map();
   (S.data?.groups || []).forEach((g, i) => {
     map.set(g, i < PALETTE.length ? PALETTE[i] : NEUTRO);
   });
-  return map;
+  return (S.groupColorCache = map);
 }
 
 // Facies: mismos tonos validados, en orden fijo del catalogo para que una
 // facies conserve su color aunque cambie el conjunto de datos.
 function faciesColors() {
+  if (S.faciesColorCache) return S.faciesColorCache;
   const map = new Map();
   const codigos = (S.data?.facies?.counts || []).map(c => c.facies);
   codigos.forEach((code, i) => {
-    map.set(code, i < PALETTE.length ? PALETTE[i] : NEUTRO);
+    map.set(code, S.data.facies.colors?.[code] || (i < PALETTE.length ? PALETTE[i] : NEUTRO));
   });
-  return map;
+  return (S.faciesColorCache = map);
 }
 
 
 function tdsScale() {
-  const vals = S.samples.map(s => s.tds).filter(v => v !== null);
-  return { min: Math.min(...vals), max: Math.max(...vals) };
+  if (S.tdsScaleCache) return S.tdsScaleCache;
+  let min = Infinity, max = -Infinity;
+  S.samples.forEach(sample => {
+    if (Number.isFinite(sample.tds)) { min = Math.min(min, sample.tds); max = Math.max(max, sample.tds); }
+  });
+  return (S.tdsScaleCache = {min, max});
 }
 
-const NORM_COLORS = { ok: '#176b50', aesthetic: '#9b4a14', health: '#a72d45' };
+const NORM_COLORS = { unknown: NEUTRO, ok: '#176b50', aesthetic: '#9b4a14', health: '#a72d45' };
 const NORM_LABELS = {
-  ok: 'Cumple todos los umbrales',
-  aesthetic: 'Supera algún umbral organoléptico',
+  unknown: 'Sin parámetros evaluables',
+  ok: 'Sin excedencias en los parámetros evaluados',
+  aesthetic: 'Fuera de referencia organoléptica u operativa',
   health: 'Supera un umbral sanitario'
 };
 
 function normClass(sample) {
+  if (sample.n_evaluated === 0) return 'unknown';
   if (sample.exceeds_health) return 'health';
   if (sample.n_exceedances > 0) return 'aesthetic';
   return 'ok';
@@ -141,6 +149,7 @@ function colorFor(sample, mode) {
     const v = sample.mgl ? sample.mgl.F : null;
     if (v === null || v === undefined) return NEUTRO;
     const limite = fluorideLimit();
+    if (limite === null) return '#0f7d52';
     if (v > limite) return '#a32020';
     if (v > limite * 0.66) return '#8a5300';
     return '#1c6b47';
@@ -170,6 +179,7 @@ function legendEntries(mode) {
   }
   if (mode === 'fluorideLevel') {
     const limite = fluorideLimit();
+    if (limite === null) return [{color: '#0f7d52', label: 'Fluoruro medido · Sin límite de comparación'}];
     const cuenta = (prueba) => S.samples.filter(s => {
       const v = s.mgl ? s.mgl.F : null;
       return v !== null && v !== undefined && prueba(v, limite);
@@ -268,6 +278,7 @@ async function uploadFile(file) {
   busy(true, `Leyendo ${file.name}...`);
   const form = new FormData();
   form.append('file', file);
+  form.append('analysis_options', JSON.stringify({standard: currentOptions().standard}));
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: form });
     if (!res.ok) {
@@ -287,7 +298,7 @@ function currentOptions(extra) {
     piper_convention: $('#sel-convention').value || undefined,
     stiff_template: $('#sel-stiff').value || undefined,
     facies_scheme: $('#sel-facies').value || undefined,
-    standard: $('#sel-standard').value || undefined,
+    standard: $('#sel-standard').value === 'custom' ? S.customStandard : ($('#sel-standard').value || undefined),
     crs: $('#sel-crs').value || undefined
   };
   // Solo se manda si el usuario ha decidido: sin la clave, el servidor aplica
@@ -311,22 +322,25 @@ async function reanalyse() {
 
 function adopt(payload) {
   S.data = payload;
+  S.groupColorCache = null; S.faciesColorCache = null; S.tdsScaleCache = null;
   S.figuras = [];
   S.samples = payload.samples;
   S.byId = new Map(S.samples.map(s => [s.id, s]));
   S.selection.clear();
-  S.piperDrawn.clear();
+  // Plotly.react conserva los listeners; se conectan una sola vez por elemento.
+  S.temporalRequest = (S.temporalRequest || 0) + 1;
+  S.seriesCache = new Map();
   S.zerosAsMissing = payload.zeros_as_missing_for || [];
   const selEstacion = $('#sel-station');
   if (selEstacion) selEstacion.dataset.filled = '';
   S.trajectories = null;
-  S.durovDrawn = false;
   const np = $('#sel-normparam');
   if (np) np.dataset.filled = '';
 
   $('#file-chip').hidden = false;
   $('#file-name').textContent = payload.source;
   document.body.dataset.demo = payload.is_synthetic_demo ? 'si' : 'no';
+  $('#demo-badge').hidden = !payload.is_synthetic_demo;
   $('#file-meta').textContent = ` · ${payload.n_samples} muestras`;
   $$('#rail button').forEach(b => { b.disabled = false; });
   const tempBtn = document.querySelector('#rail button[data-view="temporal"]');
@@ -358,6 +372,10 @@ function syncSelects() {
   $('#stiff-note').textContent = S.data.stiff.note;
   const f = $('#sel-facies');
   if (f.options.length) f.value = S.data.facies.scheme;
+  if (S.data.standard.key === 'custom') {
+    S.customStandard = {name: S.data.standard.name, limits: S.data.standard.limits};
+  }
+  syncStandardMenu(S.data.standard.key);
   const norma = $('#sel-standard');
   if (norma.options.length && S.data.standard.key) norma.value = S.data.standard.key;
   const c = $('#sel-crs');
@@ -373,7 +391,7 @@ function renderStatus() {
   $('#st-conv').textContent = `Piper: ${S.data.piper.name}`;
   $('#st-campaign').textContent = S.data.has_dates
     ? `${S.data.campaigns.length} campañas`
-    : 'campaña única — sin fecha registrada';
+    : 'Sin fechas de muestreo registradas';
 }
 
 /* ------------------------------------------------------------------ navegacion */
@@ -424,16 +442,18 @@ function piperTraces(divId) {
 
   // Una serie por categoria del criterio de color: asi la leyenda de Plotly
   // sirve de filtro sobre lo que se esta mirando, no sobre el grupo siempre.
-  const porFacies = S.colorBy === 'facies';
-  const cats = porFacies
-    ? (S.data.facies.counts || []).map(c => c.facies)
-    : (S.data.groups.length ? S.data.groups : ['Sin grupo']);
-  const nombreCat = c => porFacies
-    ? (S.data.facies.labels[c] || c) : c;
+  const keyFor = sample => S.colorBy === 'facies' ? sample.facies
+    : S.colorBy === 'cbe' ? sample.cbe_flag || 'unknown'
+    : S.colorBy === 'norm' ? normClass(sample)
+    : S.colorBy === 'tds' ? (Number.isFinite(sample.tds) ? 'TDS' : 'Sin TDS') : sample.group;
+  const cats = [...new Set(S.samples.map(keyFor))];
+  const nombreCat = code => S.colorBy === 'facies' ? (S.data.facies.labels[code] || code)
+    : S.colorBy === 'cbe' ? CBE_LABELS[code]
+    : S.colorBy === 'norm' ? NORM_LABELS[code] : code;
 
   cats.forEach(cat => {
     const g = nombreCat(cat);
-    const subset = S.samples.filter(s => (porFacies ? s.facies : s.group) === cat);
+    const subset = S.samples.filter(sample => keyFor(sample) === cat);
     if (!subset.length) return;
     const colors = subset.map(s => colorFor(s, S.colorBy));
     const sizes = subset.map(s => S.selection.has(s.id) ? 16 : 9);
@@ -455,7 +475,13 @@ function piperTraces(divId) {
         }
       }
     };
+    if (S.colorBy === 'tds' && cat === 'TDS') {
+      const range = tdsScale();
+      common.marker = {...common.marker, color: subset.map(s => s.tds),
+        colorscale: [[0, '#0d6e7b'], [1, '#b43c2b']], cmin: range.min, cmax: range.max > range.min ? range.max : range.min + 1};
+    }
     traces.push({ ...common,
+      marker: S.colorBy === 'tds' && cat === 'TDS' ? {...common.marker, showscale: true, colorbar: {title: {text: 'TDS (mg/L)'}, thickness: 12, len: 0.65}} : common.marker,
       x: subset.map(s => s.piper.cat[0]), y: subset.map(s => s.piper.cat[1]) });
     traces.push({ ...common, showlegend: false,
       x: subset.map(s => s.piper.an[0]), y: subset.map(s => s.piper.an[1]) });
@@ -514,7 +540,7 @@ async function loadTrajectories() {
 function hoverText(s) {
   const pct = (a, b) => a === null || b === null ? '—' : fmt(a, 2);
   return [
-    `<b>${s.station}</b>`,
+    `<b>${escapeHtml(s.station)}</b>`,
     s.group,
     s.facies_label ? `<i>${s.facies_label}</i>` : '',
     `TDS ${fmt(s.tds, 0)} mg/L`,
@@ -547,7 +573,7 @@ function drawPiper(divId) {
   const b = S.data.piper.background.bounds;
   const th = THEME();
   const layout = {
-    margin: { l: 10, r: 10, t: 10, b: 54 },
+    margin: { l: 10, r: 10, t: 10, b: 100 },
     xaxis: { range: [b[0], b[2]], visible: false, fixedrange: false },
     yaxis: { range: [b[1], b[3]], visible: false, scaleanchor: 'x', scaleratio: 1 },
     annotations: piperAnnotations(),
@@ -565,7 +591,7 @@ function drawPiper(divId) {
   const config = { displaylogo: false, responsive: true, scrollZoom: true,
                    modeBarButtonsToRemove: ['autoScale2d', 'toggleSpikelines'] };
 
-  Plotly.react(el, piperTraces(divId), layout, config);
+  renderPlot(el, piperTraces(divId), layout, config);
 
   if (!S.piperDrawn.has(divId)) {
     S.piperDrawn.add(divId);
@@ -586,7 +612,9 @@ function drawPiper(divId) {
 function stiffLimit(pool) {
   let limit = 0;
   pool.forEach(s => s.stiff.forEach(([l, r]) => { limit = Math.max(limit, l ?? 0, r ?? 0); }));
-  return Math.max(limit * 1.15, 0.5);
+  const raw = Math.max(limit * 1.15, 0.5);
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(factor => factor * magnitude).find(value => value >= raw) || raw;
 }
 
 function stiffPolygon(s, nRows) {
@@ -627,17 +655,22 @@ function drawStiff() {
   if (!paneles.length) { Plotly.purge(el); return; }
 
   const n = paneles.length;
-  const cols = porMuestra ? Math.min(n, 6) : n;
+  $('#stiff-note').textContent = S.data.stiff.note + (porMuestra
+    ? ` Mostrando ${paneles.length} de ${pool.length} muestras${pool.length > 24 ? '; selecciona muestras para cambiar el subconjunto' : ''}.`
+    : ` ${pool.length} muestras en ${n} grupos; escala común en meq/L.`);
+  // Reservar espacio real para titulos y etiquetas, tambien en pantallas pequenas.
+  const availableWidth = el.clientWidth || 900;
+  const cols = Math.min(n, Math.max(1, Math.floor((availableWidth - 110) / 300)));
   const filas = Math.ceil(n / cols);
   const traces = [];
   const layout = {
-    margin: { l: 84, r: 24, t: 40, b: 46 },
+    margin: { l: 84, r: 70, t: 48, b: 46 },
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
     showlegend: false, hovermode: 'closest', annotations: []
   };
 
   const anchoCol = 1 / cols, altoFila = 1 / filas;
-  const hx = 0.016, hy = 0.10;
+  const hx = 0.07 / cols, hy = 0.30 / filas;
 
   paneles.forEach((panel, k) => {
     const col = k % cols, fila = Math.floor(k / cols);
@@ -654,7 +687,9 @@ function drawStiff() {
       domain: [x0, x1], anchor: refY, range: [-limit, limit],
       zeroline: true, zerolinecolor: th.ink3, zerolinewidth: 1,
       gridcolor: th.grid, tickfont: { size: 9, color: th.ink3 },
-      tickformat: '.1f', nticks: 5
+      tickformat: '.1f', nticks: 5,
+      tickvals: [-limit, -limit / 2, 0, limit / 2, limit],
+      ticktext: [limit, limit / 2, 0, limit / 2, limit].map(v => fmt(v, limit < 1 ? 2 : 0))
     };
     layout[ejeY] = {
       domain: [y0, y1], anchor: refX, range: [-0.55, nRows - 0.45],
@@ -668,13 +703,13 @@ function drawStiff() {
 
     const sufijo = panel.muestras.length > 1 ? ' (' + panel.muestras.length + ')' : '';
     layout.annotations.push({
-      x: (x0 + x1) / 2, y: Math.min(y1 + 0.03, 1), xref: 'paper', yref: 'paper',
+      x: (x0 + x1) / 2, y: Math.min(y1 + 0.025 / filas, 1), xref: 'paper', yref: 'paper',
       text: '<b>' + panel.titulo + '</b>' + sufijo,
       showarrow: false, font: { size: 10.5, color: th.ink },
       xanchor: 'center', yanchor: 'bottom'
     });
 
-    if (col === cols - 1 || porMuestra) {
+    if (col === cols - 1 || k === n - 1) {
       labels.forEach((par, i) => {
         if (!par[1]) return;
         layout.annotations.push({
@@ -694,18 +729,18 @@ function drawStiff() {
         x: poly.map(pt => pt[0]), y: poly.map(pt => pt[1]),
         xaxis: refX, yaxis: refY,
         type: 'scatter', mode: 'lines', fill: 'toself',
-        opacity: sel ? 0.9 : (varios ? 0.22 : 0.5),
+        opacity: sel ? 1 : (varios ? 0.7 : 0.95),
         line: { color: color, width: sel ? 2.2 : (varios ? 1.1 : 1.6) },
-        fillcolor: color, showlegend: false,
+        fillcolor: hexToRgba(color, varios ? 0.08 : 0.24), showlegend: false,
         customdata: Array(poly.length).fill(s.id),
         hovertemplate: '<b>' + s.station + '</b><br>' + s.group + '<extra></extra>'
       });
     });
   });
 
-  layout.height = Math.max(el.clientHeight, filas * (porMuestra ? 215 : 330));
+  layout.height = Math.max(360, filas * (porMuestra ? 250 : 330));
 
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
+  renderPlot(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
   el.removeAllListeners?.('plotly_click');
   el.on('plotly_click', ev => {
     const id = ev.points?.[0]?.customdata;
@@ -716,12 +751,16 @@ function drawStiff() {
 /* ------------------------------------------------------------------ temporal */
 
 async function fetchSeries(station) {
+  const cache = S.seriesCache || (S.seriesCache = new Map());
+  if (cache.has(station)) return cache.get(station);
   const res = await fetch('/api/series', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stations: [station] })
   });
   if (!res.ok) throw new Error((await res.json()).detail || 'Error');
-  return res.json();
+  const data = await res.json();
+  cache.set(station, data);
+  return data;
 }
 
 function temporalEmptyState() {
@@ -760,14 +799,25 @@ function drawTemporal() {
     $('#temporal-body').innerHTML = '<div class="plot" id="temporal-plot"></div>';
   }
 
+  const request = S.temporalRequest = (S.temporalRequest || 0) + 1;
+  const dataset = S.data;
+  S.temporalLoading = true; refrescarBotonesFigura();
   fetchSeries(estacion)
-    .then(data => renderTemporal(data, estacion))
-    .catch(e => toast(e.message, true));
+    .then(data => {
+      if (request === S.temporalRequest && dataset === S.data && S.view === 'temporal') {
+        renderTemporal(data, estacion);
+      }
+    })
+    .catch(e => toast(e.message, true))
+    .finally(() => {
+      if (request === S.temporalRequest) { S.temporalLoading = false; refrescarBotonesFigura(); }
+    });
 }
 
 function renderTemporal(data, estacion) {
   const th = THEME();
   const modo = $('#sel-temporal-mode').value;
+  if (modo === 'trends') return renderTrendTable(data, estacion);
   const el = $('#temporal-plot');
   if (!el) return;
   if (modo === 'vertices') return renderVertexPanels(el, data, estacion, th);
@@ -836,7 +886,7 @@ function renderVertexPanels(el, data, estacion, th) {
     showarrow: false, font: { size: 10, color: th.ink3 }
   });
   layout.height = Math.max(el.clientHeight, 440);
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
+  renderPlot(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
 }
 
 function renderStiffSeries(el, data, estacion, th) {
@@ -859,7 +909,7 @@ function renderStiffSeries(el, data, estacion, th) {
     });
     i++;
   });
-  Plotly.react(el, traces, {
+  renderPlot(el, traces, {
     margin: { l: 62, r: 20, t: 44, b: 46 },
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
     xaxis: { type: 'date', gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 } },
@@ -916,7 +966,7 @@ function renderParamSeries(el, data, estacion, th) {
     font: { size: 10, color: th.ink3 }
   });
   layout.height = Math.max(el.clientHeight, 420);
-  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
+  renderPlot(el, traces, layout, { displaylogo: false, responsive: true, scrollZoom: true });
 }
 
 /* ------------------------------------------------------------------ fluoruro
@@ -933,7 +983,7 @@ function renderParamSeries(el, data, estacion, th) {
 
 function fluorideLimit() {
   const fila = (S.data.standard.rows || []).find(r => r.parameter === 'F_mgL');
-  return fila && fila.maximum !== null ? fila.maximum : 1.5;
+  return fila && fila.maximum !== null ? fila.maximum : null;
 }
 
 function fluorideSamples() {
@@ -943,7 +993,10 @@ function fluorideSamples() {
 function drawFluoride() {
   const medidas = fluorideSamples();
   const limite = fluorideLimit();
-  const excede = medidas.filter(s => s.mgl.F > limite);
+  const excede = limite === null ? [] : medidas.filter(s => s.mgl.F > limite);
+  $('#fluoride-reference').textContent = limite === null
+    ? 'No hay límite de fluoruro en los criterios seleccionados.'
+    : `Línea de referencia: ${fmt(limite, 2)} mg/L · ${S.data.standard.name}`;
   const sinMedir = S.data.n_samples - medidas.length;
 
   const nota = $('#fluoride-note');
@@ -952,7 +1005,7 @@ function drawFluoride() {
     ['fluoride-boxplot', 'fluoride-scatter'].forEach(id => Plotly.purge(id));
     return;
   }
-  nota.innerHTML =
+  nota.innerHTML = limite === null ? `${medidas.length} muestras con fluoruro medido · Sin límite de comparación.` :
     `<b>${excede.length}</b> de <b>${medidas.length}</b> muestras medidas ` +
     `(${fmt(excede.length / medidas.length * 100, 1)} %) superan ${fmt(limite, 1)} mg/L` +
     (sinMedir ? ` · <span style="color:var(--ink-3)">${sinMedir} sin medir, excluidas del porcentaje</span>` : '');
@@ -986,7 +1039,7 @@ function drawFluorideBox(medidas, limite) {
     });
   });
 
-  Plotly.react($('#fluoride-boxplot'), traces, {
+  renderPlot($('#fluoride-boxplot'), traces, {
     margin: { l: 58, r: 16, t: 14, b: 76 },
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
     showlegend: false,
@@ -994,8 +1047,8 @@ function drawFluorideBox(medidas, limite) {
              gridcolor: th.grid, automargin: true },
     yaxis: { title: { text: 'F⁻ (mg/L)', font: { size: 11, color: th.ink2 } },
              gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 }, zeroline: false },
-    shapes: [limiteShape(limite, th)],
-    annotations: [limiteLabel(limite, th)],
+    shapes: limite === null ? [] : [limiteShape(limite, th)],
+    annotations: limite === null ? [] : [limiteLabel(limite, th)],
     hovermode: 'closest'
   }, { displaylogo: false, responsive: true });
 
@@ -1026,20 +1079,20 @@ function drawFluorideScatter(medidas, limite) {
         line: { color: th.halo, width: sub.map(s => S.selection.has(s.id) ? 2.4 : 1.4) }
       },
       customdata: sub.map(s => s.id),
-      text: sub.map(s => `<b>${s.station}</b><br>${g}<br>Ca ${fmt(s.mgl.Ca, 1)} mg/L · F ${fmt(s.mgl.F, 2)} mg/L`),
+      text: sub.map(s => `<b>${escapeHtml(s.station)}</b><br>${g}<br>Ca ${fmt(s.mgl.Ca, 1)} mg/L · F ${fmt(s.mgl.F, 2)} mg/L`),
       hovertemplate: '%{text}<extra></extra>'
     });
   });
 
-  Plotly.react($('#fluoride-scatter'), traces, {
+  renderPlot($('#fluoride-scatter'), traces, {
     margin: { l: 58, r: 16, t: 14, b: 48 },
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
     xaxis: { title: { text: 'Ca²⁺ (mg/L)', font: { size: 11, color: th.ink2 } },
              gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 }, zeroline: false },
     yaxis: { title: { text: 'F⁻ (mg/L)', font: { size: 11, color: th.ink2 } },
              gridcolor: th.grid, tickfont: { size: 10, color: th.ink3 }, zeroline: false },
-    shapes: [limiteShape(limite, th)],
-    annotations: [limiteLabel(limite, th)],
+    shapes: limite === null ? [] : [limiteShape(limite, th)],
+    annotations: limite === null ? [] : [limiteLabel(limite, th)],
     legend: { font: { size: 10, color: th.ink2 }, orientation: 'h', y: -0.18 },
     hovermode: 'closest'
   }, { displaylogo: false, responsive: true });
@@ -1050,7 +1103,7 @@ function drawFluorideScatter(medidas, limite) {
 function limiteShape(limite, th) {
   return {
     type: 'line', xref: 'paper', x0: 0, x1: 1, y0: limite, y1: limite,
-    line: { color: 'var(--err)', width: 1.6, dash: 'dash' }
+    line: { color: '#a32020', width: 1.6, dash: 'dash' }
   };
 }
 
@@ -1222,7 +1275,7 @@ function stiffTooltipHtml(s) {
       `<td style="padding:0 4px"><b>${fmt(r, 2)}</b></td>` +
       `<td>${par[1] || ''}</td></tr>`;
   }).join('');
-  return `<b>${s.station}</b><br><span style="color:var(--ink-3)">${s.group}</span>` +
+  return `<b>${escapeHtml(s.station)}</b><br><span style="color:var(--ink-3)">${escapeHtml(s.group)}</span>` +
     (s.facies_label ? `<br>${s.facies_label}` : '') +
     (filas ? `<table style="margin-top:4px;font-size:11px;border-spacing:0">${filas}</table>
               <div style="color:var(--ink-3);font-size:10.5px">meq/L</div>` : '');
@@ -1297,7 +1350,7 @@ function paintMarkers(containerId, mode, shape) {
     }
 
     marker.bindTooltip(
-      conStiff ? stiffTooltipHtml(s) : `<b>${s.station}</b><br>${s.group}`,
+      conStiff ? stiffTooltipHtml(s) : `<b>${escapeHtml(s.station)}</b><br>${escapeHtml(s.group)}`,
       { direction: 'top', opacity: 1 });
     marker.on('click', () => setSelection([s.id]));
     marker.addTo(map);
@@ -1370,8 +1423,8 @@ function setSelection(ids) {
   S.selection = new Set(ids);
   renderStatus();
   // todas las vistas leen del mismo estado
-  if (S.piperDrawn.has('piper-plot')) drawPiper('piper-plot');
-  if (S.piperDrawn.has('piper-plot2')) drawPiper('piper-plot2');
+  if (S.view === 'piper') drawPiper('piper-plot');
+  if (S.view === 'cross') drawPiper('piper-plot2');
   if (S.view === 'stiff') drawStiff();
   if (S.view === 'durov') drawDurov();
   if (S.view === 'norm') drawNorm();
@@ -1413,8 +1466,8 @@ function renderTable(sel, rows) {
     <th style="text-align:right">Alcalinidad</th>
   </tr></thead>`;
   const body = rows.map(s => `<tr data-id="${s.id}">
-    <td>${s.station}</td><td>${s.group}</td>
-    <td>${s.facies_label || '—'}</td>
+    <td>${escapeHtml(s.station)}</td><td>${escapeHtml(s.group)}</td>
+    <td>${escapeHtml(s.facies_label || '—')}</td>
     ${ions.map(i => `<td class="num${s.imputed.includes(i) ? ' imp' : ''}">${fmt(s.mgl[i], 2)}</td>`).join('')}
     <td class="num">${fmt(s.tds, 0)}</td>
     <td class="num">${fmt(s.cbe, 2)}</td>
@@ -1435,8 +1488,8 @@ function detailHtml(s) {
   const labels = S.data.ion_labels;
   const flag = s.cbe_flag === 'acceptable' ? 'ok' : s.cbe_flag === 'marginal' ? 'warn' : s.cbe_flag === 'rejected' ? 'err' : 'info';
   return `<div class="detail">
-    <h3>${s.station}</h3>
-    <div class="sub">${s.group}${s.sampled_at ? ' · ' + String(s.sampled_at).slice(0, 10) : ''}</div>
+    <h3>${escapeHtml(s.station)}</h3>
+    <div class="sub">${escapeHtml(s.group)}${s.sampled_at ? ' · ' + String(s.sampled_at).slice(0, 10) : ''}</div>
     ${s.facies_label ? `<p style="margin:0 0 10px"><span class="tag info">${s.facies_label}</span>
       ${s.n_exceedances ? `<span class="tag ${s.exceeds_health ? 'err' : 'warn'}">supera ${s.n_exceedances} umbral(es)</span>` : ''}</p>` : ''}
     <dl class="kv">
@@ -1615,14 +1668,18 @@ function drawDurov() {
     ? avisos
     : `Cuadrado central: x = ${d.axis_titles.x} · y = ${d.axis_titles.y}`;
 
+  const entries = legendEntries(modo);
+  entries.forEach(entry => traces.push({x: [null], y: [null], type: 'scatter', mode: 'markers',
+    name: entry.label, marker: {color: entry.color, size: 8}, showlegend: true, hoverinfo: 'skip'}));
   const b = d.bounds;
-  Plotly.react(el, traces, {
-    margin: { l: 12, r: 12, t: 12, b: 12 },
+  renderPlot(el, traces, {
+    margin: { l: 20, r: 30, t: 15, b: 110 },
     xaxis: { range: [b[0], b[2]], visible: false },
     yaxis: { range: [b[1], b[3]], visible: false, scaleanchor: 'x', scaleratio: 1 },
     annotations: anotaciones,
     paper_bgcolor: th.paper, plot_bgcolor: th.paper,
-    showlegend: false, hoverlabel: { align: 'left' }, dragmode: 'lasso'
+    showlegend: true, legend: {orientation: 'h', y: -0.06, x: 0, font: {size: 10}, itemclick: false, itemdoubleclick: false},
+    hoverlabel: { align: 'left' }, dragmode: 'lasso'
   }, { displaylogo: false, responsive: true, scrollZoom: true });
 
   if (!S.durovDrawn) {
@@ -1660,11 +1717,12 @@ function drawNorm() {
   const tarjetas = std.rows.map(r => {
     const clase = r.n_exceeding === 0 ? 'ok' : (r.kind === 'health' ? 'bad' : 'warn');
     return `<div class="norm-card ${clase}">
-      <h4>${r.label}</h4>
+      <h4>${escapeHtml(r.label)}</h4>
       <div class="big">${r.n_exceeding}<span class="sub"> / ${r.n_measured}</span></div>
       <div class="sub">${fmt(r.pct, 1)} % de las medidas</div>
-      <div class="lim">Límite ${r.range_text} · ${r.kind_label}</div>
-      <div class="lim">Observado ${fmt(r.min_observed, 2)} – ${fmt(r.max_observed, 2)} ${r.unit}</div>
+      <div class="lim">Criterio ${escapeHtml(r.range_text)} · ${escapeHtml(r.kind_label)}</div>
+      <div class="lim">Observado ${fmt(r.min_observed, 2)} – ${fmt(r.max_observed, 2)} ${escapeHtml(r.unit)}</div>
+      <div class="lim">${escapeHtml(r.note || '')}</div>
       ${r.n_missing ? `<div class="lim" style="color:var(--ink-3)">${r.n_missing} sin medir</div>` : ''}
     </div>`;
   }).join('');
@@ -1673,7 +1731,7 @@ function drawNorm() {
   const psel = $('#sel-normparam');
   if (psel.dataset.filled !== std.key) {
     psel.innerHTML = std.rows.map(r =>
-      `<option value="${r.parameter}">${r.label}</option>`).join('');
+      `<option value="${r.parameter}">${escapeHtml(r.label)}</option>`).join('');
     psel.dataset.filled = std.key;
   }
   const param = psel.value || std.rows[0].parameter;
@@ -1691,30 +1749,42 @@ function drawNorm() {
   }).sort((a, b) => valorDe(b) - valorDe(a));
 
   const filas = incumplen.map(s => `<tr data-id="${s.id}">
-    <td>${s.station}</td><td>${s.group}</td>
-    <td>${s.facies_label || '—'}</td>
+    <td>${escapeHtml(s.station)}</td><td>${escapeHtml(s.group)}</td>
+    <td>${escapeHtml(s.facies_label || '—')}</td>
     <td class="num" style="color:var(--err);font-weight:600">${fmt(valorDe(s), 2)}</td>
-    <td class="num">${fmt(valorDe(s) / (row.maximum || 1), 2)}×</td>
+    <td class="num">${row.minimum !== null && valorDe(s) < row.minimum ? 'Por debajo del mínimo' : 'Por encima del máximo'}</td>
   </tr>`).join('');
 
   $('#norm-body').innerHTML = `
+    <div class="criteria-summary"><strong>${escapeHtml(std.name)}</strong>
+      <p>Evaluación de los parámetros disponibles. No constituye una certificación de potabilidad.</p>
+      ${std.source_url ? `<a href="${escapeHtml(std.source_url)}" target="_blank" rel="noopener">Consultar la fuente</a>` : ''}
+      ${std.key === 'custom' ? '<span> · Criterios personalizados del usuario</span>' : ''}</div>
+    <details class="criteria-reference"><summary>Valores de referencia y fuentes</summary>
+      <table><thead><tr><th>Parámetro</th><th>Criterio</th><th>Tipo</th><th>Referencia</th></tr></thead><tbody>
+      ${(std.limits || []).map(lim => `<tr><td>${escapeHtml(lim.label)}</td><td>${escapeHtml(lim.range_text)}</td>
+        <td>${escapeHtml(lim.kind_label)}</td><td>${escapeHtml(lim.note)}
+        ${lim.source_url ? `<a href="${escapeHtml(lim.source_url)}" target="_blank" rel="noopener">Fuente</a>` : ''}</td></tr>`).join('')}
+      </tbody></table></details>
+    <div id="norm-plot"></div>
     <div class="norm-grid">${tarjetas}</div>
     <h4 style="margin:6px 0 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)">
-      ${row.label}: muestras que superan el límite (${incumplen.length} de ${medidas.length} medidas)
+      ${escapeHtml(row.label)}: muestras fuera del intervalo permitido (${incumplen.length} de ${medidas.length} medidas)
     </h4>
     ${incumplen.length ? `<table><thead><tr>
         <th>Estación</th><th>Grupo</th><th>Facies</th>
-        <th style="text-align:right">${row.unit}</th>
-        <th style="text-align:right">Veces el límite</th>
+        <th style="text-align:right">${escapeHtml(row.unit)}</th>
+        <th style="text-align:right">Criterio incumplido</th>
       </tr></thead><tbody>${filas}</tbody></table>`
-      : '<p style="color:var(--ok)">Ninguna muestra supera este límite.</p>'}
+      : '<p style="color:var(--ok)">Ninguna muestra queda fuera del criterio seleccionado.</p>'}
     <p class="hint" style="color:var(--ink-3);font-size:11.5px;margin-top:12px">
       El denominador son las muestras <b>con medida</b> (${medidas.length}), no el total
       (${S.data.n_samples}). Contar las no medidas como cumplidoras rebaja el porcentaje
       y es el error más habitual.</p>`;
 
+  renderNormChart(std);
   $('#norm-body').querySelectorAll('tbody tr').forEach(tr => {
-    tr.addEventListener('click', () => { setSelection([tr.dataset.id]); showView('map'); });
+    tr.addEventListener('click', () => { setSelection([tr.dataset.id]); showView(S.data.has_coordinates ? 'map' : 'data'); });
   });
 }
 
@@ -1768,19 +1838,8 @@ async function applyMapping() {
 }
 
 /* ------------------------------------------------------------------ figuras
-
-   Descargar un grafico suelto, o todos en un ZIP.
-
-   Los PNG los dibuja el servidor con matplotlib, no el navegador. Podria
-   hacerse aqui con Plotly.toImage y seria instantaneo, pero saldria a la
-   resolucion de la pantalla de turno y con el aspecto del lienzo interactivo.
-   Lo que hace falta para un informe es otra cosa: 200 ppp, fondo blanco,
-   titulo y leyenda. Ademas asi el boton de cada grafico y el ZIP entregan
-   exactamente la misma imagen, que es lo que uno espera.
-
-   Contrapartida honesta: la figura descargada NO lleva la seleccion ni el
-   "color por" que tengas puesto en pantalla; es la figura completa del
-   conjunto. Se avisa en la vista de exportacion.
+   Los botones junto a cada gráfica exportan su vista actual en el navegador.
+   El catálogo del informe genera figuras generales en el servidor.
 */
 
 //: Que figura le corresponde a cada vista. Algunas dependen de un control,
@@ -1801,9 +1860,12 @@ function figuraInfo(key) {
 }
 
 async function cargarFiguras() {
+  const dataset = S.data;
   try {
     const res = await fetch('/api/figures');
-    S.figuras = res.ok ? (await res.json()).figures : [];
+    const figures = res.ok ? (await res.json()).figures : [];
+    if (dataset !== S.data) return;
+    S.figuras = figures;
   } catch { S.figuras = []; }
   refrescarBotonesFigura();
   pintarListaFiguras();
@@ -1883,10 +1945,18 @@ function montarBotonesFigura() {
     b.type = 'button';
     b.className = 'btn-fig';
     b.dataset.figura = vista;
-    b.innerHTML = '<span aria-hidden="true">↓</span> PNG';
-    b.addEventListener('click', () => descargarFigura(FIGURA_DE_VISTA[vista]()));
+    b.innerHTML = '<span aria-hidden="true">↓</span> ' + (vista === 'norm' ? 'PNG del resumen' : vista === 'validation' ? 'PNG del balance' : 'PNG');
+    b.addEventListener('click', () => descargarVista(vista));
     head.appendChild(b);
   });
+  const head = document.querySelector('.view[data-view="fluoride"] .pane:nth-child(2) > header');
+  if (head && !head.querySelector('.btn-fig')) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn-fig'; b.dataset.figura = 'fluoride';
+    b.textContent = '↓ PNG'; b.title = 'Descargar fluoruro frente a calcio';
+    b.addEventListener('click', () => descargarVista('fluoride', 'fluoride-scatter'));
+    head.appendChild(b);
+  }
   refrescarBotonesFigura();
 }
 
@@ -1898,11 +1968,13 @@ function refrescarBotonesFigura() {
     const key = FIGURA_DE_VISTA[b.dataset.figura]();
     const info = figuraInfo(key);
     const hayDatos = Boolean(S.data);
-    const ok = hayDatos && (!info || info.available);
+    const ok = hayDatos && (b.dataset.figura === 'temporal'
+      ? S.data.temporal.can_plot_series && $('#sel-temporal-mode').value !== 'trends' && !S.temporalLoading
+      : (!info || info.available));
     b.disabled = !ok;
     b.title = !hayDatos ? 'Carga datos para poder descargar figuras.'
-      : ok ? `Descargar "${info ? info.title : key}" en PNG a 200 ppp`
-        : (info.reason || 'No disponible con estos datos.');
+      : ok ? (b.dataset.figura === 'validation' ? 'Descargar histograma del balance iónico' : 'Descargar PNG de la vista actual con sus opciones')
+        : (info?.reason || 'No hay una gráfica disponible para esta vista.');
   });
 }
 
@@ -1920,20 +1992,22 @@ function renderExport() {
     <div class="controls">
       <a class="btn primary" href="/api/export/xlsx" download>Excel (.xlsx)</a>
       <a class="btn" href="/api/export/csv" download>CSV</a>
+      <a class="btn" href="/api/project" download>Guardar proyecto (.json)</a>
     </div>
-    <p style="color:var(--ink-3);font-size:12px;margin-top:6px">El Excel trae una hoja
+    <p style="color:var(--ink-3);font-size:12px;margin-top:6px">El proyecto conserva datos y criterios para reabrirlos. El Excel trae una hoja
        por bloque: resultados, facies, umbrales, validación y pesos equivalentes.</p>
 
     <h4 style="margin:20px 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)">Google Earth y SIG</h4>
     ${geo ? `<div class="controls">
-      <a class="btn primary" href="/api/export/kmz?colour_by=facies" download>KMZ con diagramas de Stiff</a>
+      <button class="btn primary" id="btn-kmz">Descargar KMZ</button>
+      <label class="control">Color <select id="sel-kmz-color"><option value="facies">Facies</option><option value="group">Grupo</option></select></label>
+      <label class="control">Ficha <select id="sel-kmz-detail"><option value="false">Compacta · más rápida</option><option value="true">Detallada · imagen con valores</option></select></label>
       <a class="btn" href="/api/export/kml?colour_by=facies" download>KML ligero</a>
       <a class="btn" href="/api/export/geojson" download>GeoJSON</a>
     </div>
     <p style="color:var(--ink-3);font-size:12px;margin-top:6px">
       En el <b>KMZ</b> el icono de cada punto es su propio diagrama de Stiff, agrupado
-      por grupo y con la ficha completa en el globo. Son ${S.data.n_samples} imágenes,
-      así que tarda unos segundos. El <b>KML</b> pesa mil veces menos pero lleva
+      por grupo y con la ficha completa en el globo. Se incluye una escala común para comparar las concentraciones. El <b>KML</b> es más ligero y lleva
       círculos de color en vez de diagramas. El <b>GeoJSON</b> es el que abre QGIS.</p>`
       : sinCoords}
 
@@ -1942,18 +2016,17 @@ function renderExport() {
       <button class="btn primary" id="btn-zip-figuras">Todas las figuras (.zip)</button>
     </div>
     <p style="color:var(--ink-3);font-size:12px;margin-top:6px">
-      PNG a 200 ppp con fondo blanco, listos para pegar en un informe sin
-      reescalar. Dentro va un <b>LEEME</b> con las opciones usadas y, si alguna
+      Figuras generales a 200 ppp con fondo blanco, título, unidades y leyenda. Dentro va un <b>LEEME</b> con las opciones usadas y, si alguna
       figura no sale, el motivo. Cada grafico tiene ademas su propio boton
       <b>↓ PNG</b> arriba a la derecha.<br>
-      La figura descargada es la del conjunto completo: no recoge la seleccion
-      ni el «color por» que tengas puesto en pantalla.</p>
+      Los botones PNG de las gráficas descargan la vista actual, con sus controles y selección.
+      Este paquete contiene figuras generales del conjunto completo, coloreadas por grupo.</p>
     <div id="figuras-lista" class="figuras-lista"></div>
-
-    <h4 style="margin:20px 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)">Todavía no disponible</h4>
-    <p style="color:var(--ink-3)">Informe en PDF y guardado de proyectos.</p>`;
+`;
 
   $('#btn-zip-figuras').addEventListener('click', descargarTodasLasFiguras);
+  $('#btn-kmz')?.addEventListener('click', downloadKmz);
+  $('#sel-kmz-color') && ($('#sel-kmz-color').value = S.mapColorBy === 'group' ? 'group' : 'facies');
   pintarListaFiguras();
 }
 
@@ -1977,12 +2050,16 @@ function pintarListaFiguras() {
 
 function wire() {
   montarBotonesFigura();
+  $('#btn-project-open').addEventListener('click', () => $('#project-input').click());
+  $('#project-input').addEventListener('change', ev => {
+    openProjectFile(ev.target.files[0]); ev.target.value = '';
+  });
   $('#rail').addEventListener('click', ev => {
     const b = ev.target.closest('button');
     if (b && !b.disabled) showView(b.dataset.view);
   });
 
-  const pick = () => $('#file-input').click();
+  const pick = () => { if (S.optionsReady) $('#file-input').click(); };
   $('#btn-open').addEventListener('click', pick);
   $('#btn-open-2').addEventListener('click', pick);
   $('#file-input').addEventListener('change', ev => {
@@ -2001,6 +2078,7 @@ function wire() {
   ['dragleave', 'drop'].forEach(e =>
     drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', ev => {
+    if (!S.optionsReady) return;
     const f = ev.dataTransfer.files[0];
     if (f) uploadFile(f);
   });
@@ -2008,7 +2086,13 @@ function wire() {
 
   $('#sel-convention').addEventListener('change', reanalyse);
   $('#sel-facies').addEventListener('change', reanalyse);
-  $('#sel-standard').addEventListener('change', reanalyse);
+  $('#sel-standard').addEventListener('change', applyStandardSelection);
+  $('#btn-criteria').addEventListener('click', openCriteriaEditor);
+  $('#criteria-close').addEventListener('click', () => { $('#criteria-sheet').hidden = true; });
+  $('#criteria-save').addEventListener('click', saveCriteria);
+  $('#criteria-sheet').addEventListener('click', ev => {
+    if (ev.target.id === 'criteria-sheet') $('#criteria-sheet').hidden = true;
+  });
   $('#sel-crs').addEventListener('change', reanalyse);
   $('#sel-normparam').addEventListener('change', drawNorm);
   $('#sel-stiff-scale').addEventListener('change', ev => {
@@ -2067,6 +2151,7 @@ function wire() {
 }
 
 async function init() {
+  setStartupReady(false);
   wire();
   try {
     const opts = await (await fetch('/api/options')).json();
@@ -2076,8 +2161,11 @@ async function init() {
       .map(t => `<option value="${t.key}">${t.name}</option>`).join('');
     $('#sel-facies').innerHTML = opts.facies_schemes
       .map(f => `<option value="${f.key}">${f.name}</option>`).join('');
-    $('#sel-standard').innerHTML = opts.standards
-      .map(st => `<option value="${st.key}">${st.name}</option>`).join('');
+    S.standardCatalog = opts.standards;
+    S.criteriaParameters = opts.schema.filter(f => f.kind === 'ion' || ['tds_mgl', 'ph', 'temp_c', 'do_mgl'].includes(f.key));
+    const remembered = readCriteria();
+    S.customStandard = remembered?.custom || null;
+    syncStandardMenu(remembered?.active || 'who_drinking');
     $('#sel-crs').innerHTML = '<option value="">Detectar automáticamente</option>' +
       opts.crs_options.map(c =>
         `<option value="${c.epsg}">${c.name}</option>`).join('');
@@ -2089,6 +2177,7 @@ async function init() {
           `Excel .xlsx y .xlsm, o CSV · hasta ${opts.limits.max_upload_mb} MB`;
       }
     }
+    setStartupReady(true);
     if (!opts.example_available) {
       $('#btn-example').disabled = true;
       $('#btn-example-2').disabled = true;
@@ -2098,6 +2187,11 @@ async function init() {
     const previo = await (await fetch('/api/state')).json();
     if (previo.loaded) {
       adopt(previo);
+      if (remembered?.active && remembered.active !== previo.standard.key &&
+          [...$('#sel-standard').options].some(o => o.value === remembered.active)) {
+        $('#sel-standard').value = remembered.active;
+        await applyStandardSelection();
+      }
       toast(`Recuperado: ${previo.source}`);
     }
   } catch (e) {

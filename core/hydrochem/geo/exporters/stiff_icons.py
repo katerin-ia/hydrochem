@@ -29,6 +29,44 @@ import pandas as pd
 
 from ...geometry import stiff as stiff_mod
 
+
+def render_map_icons(df, colors=None, group_col="group", template="standard", progress=None):
+    """Small map symbols on a fixed canvas; common concentration scale.
+
+    Reuses polygon artists and the Agg canvas instead of clearing and rebuilding
+    axes and text for every marker. Full axes belong in the detailed balloon.
+    """
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.patches import Polygon
+    tpl = stiff_mod.get_template(template)
+    rows = stiff_mod.row_values(df, tpl)
+    limit = stiff_mod.axis_limit(df, tpl)
+    fig = Figure(figsize=(1.6, 1.2), dpi=100)
+    fig.patch.set_alpha(0)
+    canvas = FigureCanvasAgg(fig)
+    ax = fig.add_axes((0.03, 0.04, 0.94, 0.92))
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-0.35, tpl.n_rows - 0.65)
+    ax.set_axis_off()
+    ax.axvline(0, color=INK_3, lw=0.65, alpha=0.7)
+    patch = Polygon([(0, 0)], closed=True, lw=1.5, alpha=0.85)
+    ax.add_patch(patch)
+    groups = df[group_col].astype(str).tolist() if group_col in df else [""] * len(df)
+    out = []
+    for pos, (_, values) in enumerate(rows.iterrows()):
+        color = (colors or {}).get(groups[pos], "#0f7d52")
+        patch.set_xy(stiff_mod.polygon(values, tpl))
+        patch.set_facecolor(color)
+        patch.set_edgecolor(color)
+        buffer = io.BytesIO()
+        canvas.print_png(buffer)
+        out.append(buffer.getvalue())
+        if progress:
+            progress(pos + 1, len(rows))
+    fig.clear()
+    return out
+
 #: Tamano del icono en pulgadas y resolucion. Un icono de mapa no necesita mas:
 #: a 100 ppp sale de unos 250x190 px, que pesa poco y se ve bien.
 ICON_SIZE = (2.5, 1.9)

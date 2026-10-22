@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import io
 import zipfile
+import textwrap
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -29,6 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 
 from .. import temporal as temporal_mod
 from ..chemistry import facies as facies_mod
@@ -36,6 +39,7 @@ from ..geometry import durov as durov_mod
 from ..geometry import piper as piper_mod
 from ..geometry import stiff as stiff_mod
 from ..quality import standards as std_mod
+from .plotting import serialized
 
 # --------------------------------------------------------------------- estilo
 
@@ -79,17 +83,44 @@ def _frame(ax) -> None:
     ax.tick_params(colors=INK_3, labelsize=8)
 
 
-def _title(fig, texto: str, subtexto: str = "") -> None:
-    fig.suptitle(texto, fontsize=13, fontweight="bold", color=INK, y=0.99)
+def _title(fig, texto: str, subtexto: str = "", *, ds=None) -> None:
+    if ds is not None and ds.source.upper().startswith("DEMO-SINTETICO"):
+        subtexto += " · Datos sintéticos de demostración"
+    # Use physical spacing: a multiline subtitle must grow down from the
+    # title, independently of figure height and the length of the caption.
+    width = fig.get_figwidth()
+    title = fig.suptitle(textwrap.fill(texto, max(30, int(width * 9))),
+                        fontsize=14, fontweight="bold", color=INK,
+                        y=0.99, va="top")
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    title_box = title.get_window_extent(renderer).transformed(fig.transFigure.inverted())
+    fig._hc_header = title
     if subtexto:
-        fig.text(0.5, 0.945, subtexto, ha="center", fontsize=9, color=INK_3)
+        subtitle = fig.text(
+            0.5, title_box.y0 - 7 / 72 / fig.get_figheight(),
+            textwrap.fill(subtexto, max(40, int(width * 11))),
+            ha="center", va="top", fontsize=9, color=INK_3,
+            linespacing=1.4)
+        fig._hc_header = subtitle
 
 
 def _png(fig) -> bytes:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=DPI, bbox_inches="tight",
-                facecolor=PAPEL, pad_inches=0.25)
-    plt.close(fig)
+    try:
+        header = getattr(fig, "_hc_header", None)
+        if header is not None:
+            fig.canvas.draw()
+            bottom = header.get_window_extent(fig.canvas.get_renderer()).transformed(
+                fig.transFigure.inverted()).y0
+            # Reserve enough space even when a caller's tight_layout rectangle
+            # assumed a single subtitle line. Axes titles also need headroom.
+            top = bottom - 28 / 72 / fig.get_figheight()
+            fig.subplots_adjust(top=min(fig.subplotpars.top, top))
+        fig.savefig(buf, format="png", dpi=DPI, bbox_inches="tight",
+                    facecolor=PAPEL, pad_inches=0.25)
+    finally:
+        plt.close(fig)
     return buf.getvalue()
 
 
@@ -148,10 +179,10 @@ def _fig_piper(ds, convention: str | None = None) -> bytes:
     ax.set_aspect("equal")
     ax.axis("off")
     if len(grupos) > 1:
-        ax.legend(title="Grupo", loc="upper left", fontsize=8, title_fontsize=8.5,
-                  framealpha=0.95, edgecolor=GRID_STRONG)
+        ax.legend(title="Grupo", loc="upper center", bbox_to_anchor=(0.5, -0.03),
+                  ncol=2, fontsize=8, title_fontsize=8.5, frameon=False)
     _title(fig, "Diagrama de Piper",
-           f"{ds.n_samples} muestras · convencion {conv.name_es}")
+           f"{ds.n_samples} muestras · {conv.name_es} · Composición en % de meq/L", ds=ds)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     return _png(fig)
 
@@ -180,9 +211,13 @@ def _fig_stiff_grupos(ds) -> bytes:
     serie = (ds.data["group"].astype(str) if "group" in ds.data.columns
              else pd.Series(["Todas"] * len(ds.data), index=ds.data.index))
 
-    ancho = max(3.0 * len(grupos), 5.0)
-    fig, axes = plt.subplots(1, len(grupos), figsize=(ancho, 4.8), sharey=True)
-    axes = [axes] if len(grupos) == 1 else list(axes)
+    ncols = min(3, len(grupos))
+    n_panels_rows = math.ceil(len(grupos) / ncols)
+    fig, grid_axes = plt.subplots(n_panels_rows, ncols,
+        figsize=(max(5.2, 4.2 * ncols), 3.5 * n_panels_rows + 1.2), squeeze=False)
+    axes = list(grid_axes.ravel())
+    for unused in axes[len(grupos):]:
+        unused.axis("off")
 
     for ax, grupo in zip(axes, grupos):
         m = (serie == grupo).to_numpy()
@@ -204,9 +239,10 @@ def _fig_stiff_grupos(ds) -> bytes:
         ax.set_yticks(range(n_rows))
         ax.set_yticklabels(
             [etiquetas[n_rows - 1 - i][0] or "" for i in range(n_rows)], fontsize=8)
-        ax.tick_params(axis="x", labelsize=7.5, colors=INK_3)
+        ax.tick_params(axis="x", labelsize=8, colors=INK_3)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{abs(value):g}"))
         ax.set_xlabel("meq/L", fontsize=8, color=INK_3)
-        ax.set_title(f"{grupo}\n({int(m.sum())} muestras)", fontsize=9,
+        ax.set_title(f"{textwrap.fill(str(grupo), 32)}\n{int(m.sum())} muestras", fontsize=10,
                      color=INK, pad=6)
         for lado in ("top", "right", "left"):
             ax.spines[lado].set_visible(False)
@@ -214,12 +250,12 @@ def _fig_stiff_grupos(ds) -> bytes:
         for i in range(n_rows):
             derecha = etiquetas[n_rows - 1 - i][1]
             if derecha:
-                ax.text(limite * 0.97, i, derecha, ha="right", va="bottom",
-                        fontsize=7, color=INK_3)
+                ax.text(1.02, i, derecha, transform=ax.get_yaxis_transform(),
+                        ha="left", va="center", fontsize=8, color=INK_3, clip_on=False)
 
-    _title(fig, "Diagramas de Stiff superpuestos por grupo",
-           f"plantilla {tpl.name_es} · escala comun 0 a {limite:.1f} meq/L")
-    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    _title(fig, "Diagramas de Stiff por grupo",
+           f"{tpl.name_es} · Escala común: 0–{limite:.1f} meq/L por lado", ds=ds)
+    fig.tight_layout(rect=(0.01, 0.01, 0.95, 0.90), w_pad=5, h_pad=3)
     return _png(fig)
 
 
@@ -270,12 +306,12 @@ def _fig_durov(ds) -> bytes:
     ax.set_aspect("equal")
     ax.axis("off")
     if len(grupos) > 1:
-        ax.legend(title="Grupo", loc="lower right", fontsize=8, title_fontsize=8.5,
-                  framealpha=0.95, edgecolor=GRID_STRONG)
+        ax.legend(title="Grupo", loc="upper center", bbox_to_anchor=(0.5, -0.05),
+                  ncol=2, fontsize=8, title_fontsize=8.5, frameon=False)
     faltan = [n for n, c in (("pH", "ph"), ("TDS", "tds"))
               if not (paneles.get(c) or {}).get("available")]
     nota = "sin panel de " + " ni ".join(faltan) if faltan else "con paneles de pH y TDS"
-    _title(fig, "Diagrama de Durov ampliado", f"{ds.n_samples} muestras · {nota}")
+    _title(fig, "Diagrama de Durov ampliado", f"{ds.n_samples} muestras · {nota}", ds=ds)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     return _png(fig)
 
@@ -287,7 +323,7 @@ def _fig_facies(ds) -> bytes:
     # Se dibujan de menos a mas para que la barra larga quede arriba al leer.
     orden = resumen.iloc[::-1]
     etiquetas = etiquetas[::-1]
-    colores = [PALETTE[i % len(PALETTE)] for i in range(len(orden))][::-1]
+    colores = [facies_mod.color_of(code, ds.options.facies_scheme) for code in orden["facies"]]
 
     alto = max(3.0, 0.42 * len(orden) + 1.6)
     fig, ax = plt.subplots(figsize=(9.5, alto))
@@ -304,7 +340,7 @@ def _fig_facies(ds) -> bytes:
     ax.set_xlim(0, max(orden["n"]) * 1.18)
     _title(fig, "Facies hidroquimicas",
            f"{int(orden['n'].sum())} muestras clasificadas · esquema "
-           f"{ds.options.facies_scheme}")
+           f"{facies_mod.get_scheme(ds.options.facies_scheme).name_es}", ds=ds)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     return _png(fig)
 
@@ -328,7 +364,7 @@ def _fig_normas(ds) -> bytes:
     ax.set_yticklabels(
         [f"{r.label} ({r.range_text})" for r in tabla.itertuples()],
         fontsize=8.5, color=INK_2)
-    ax.set_xlabel("% de las muestras medidas que superan el limite",
+    ax.set_xlabel("Muestras medidas fuera del criterio (%)",
                   fontsize=9, color=INK_3)
     _frame(ax)
     ax.grid(axis="y", visible=False)
@@ -338,9 +374,8 @@ def _fig_normas(ds) -> bytes:
     ax.set_xlim(0, max(float(tabla["pct"].max()) * 1.25, 12))
 
     std = std_mod.get_standard(ds.options.standard)
-    _title(fig, f"Incumplimientos segun {std.name_es}",
-           "el denominador son las muestras MEDIDAS de cada parametro, "
-           "no el total")
+    _title(fig, "Comparación con criterios de calidad",
+           f"{std.name_es} · Solo parámetros medidos", ds=ds)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     return _png(fig)
 
@@ -354,7 +389,7 @@ def _fig_fluoruro(ds) -> bytes:
 
     std = std_mod.get_standard(ds.options.standard)
     lim = std.limit_for("F_mgL")
-    limite = lim.maximum if lim and lim.maximum is not None else 1.5
+    limite = lim.maximum if lim and lim.maximum is not None else None
 
     grupos = [g for g in (ds.groups or ["Todas"])]
     colores = group_colors(grupos)
@@ -390,9 +425,10 @@ def _fig_fluoruro(ds) -> bytes:
     ax1.set_xticks(range(1, len(presentes) + 1))
     ax1.set_xticklabels(presentes, rotation=20, ha="right", fontsize=8.5)
     ax1.set_ylabel("F⁻ (mg/L)", fontsize=9.5, color=INK_2)
-    ax1.axhline(limite, color=ERR, lw=1.5, ls="--", zorder=5)
-    ax1.text(len(presentes) + 0.45, limite, f"limite {limite:g}", ha="right",
-             va="bottom", fontsize=8, color=ERR)
+    if limite is not None:
+        ax1.axhline(limite, color=ERR, lw=1.5, ls="--", zorder=5)
+        ax1.text(len(presentes) + 0.45, limite, f"Referencia: {limite:g} mg/L", ha="right",
+                 va="bottom", fontsize=8, color=ERR)
     ax1.set_title("Distribucion por grupo", fontsize=10, color=INK, pad=8)
     _frame(ax1)
 
@@ -410,7 +446,8 @@ def _fig_fluoruro(ds) -> bytes:
                         alpha=0.9, edgecolors=PAPEL, linewidths=0.9, zorder=4)
         ax2.set_xlabel("Ca²⁺ (mg/L)", fontsize=9.5, color=INK_2)
         ax2.set_ylabel("F⁻ (mg/L)", fontsize=9.5, color=INK_2)
-        ax2.axhline(limite, color=ERR, lw=1.5, ls="--", zorder=5)
+        if limite is not None:
+            ax2.axhline(limite, color=ERR, lw=1.5, ls="--", zorder=5)
         if len(grupos) > 1:
             ax2.legend(fontsize=8, framealpha=0.95, edgecolor=GRID_STRONG)
         ax2.set_title("Fluoruro frente a calcio", fontsize=10, color=INK, pad=8)
@@ -421,13 +458,13 @@ def _fig_fluoruro(ds) -> bytes:
                  ha="center", va="center", fontsize=10, color=INK_2)
 
     n_med = int(medidas.sum())
-    n_exc = int((f > limite).sum())
+    n_exc = int((f > limite).sum()) if limite is not None else 0
     sin_medir = len(df) - n_med
     sub = (f"{n_exc} de {n_med} muestras medidas ({n_exc / n_med * 100:.1f} %) "
-           f"superan {limite:g} mg/L")
+           f"superan {limite:g} mg/L · {std.name_es}") if limite is not None else f"{n_med} muestras medidas · Sin límite de fluoruro seleccionado"
     if sin_medir:
         sub += f" · {sin_medir} sin medir, excluidas del porcentaje"
-    _title(fig, "Fluoruro", sub)
+    _title(fig, "Fluoruro", sub, ds=ds)
     fig.tight_layout(rect=(0, 0, 1, 0.9))
     return _png(fig)
 
@@ -537,7 +574,7 @@ def _fig_temporal_vertices(ds) -> bytes:
                   f"convencion {conv.name_es}")
     if nota:
         sub_titulo += f" - {nota}"
-    _title(fig, "Evolucion de los vertices del Piper", sub_titulo)
+    _title(fig, "Evolucion de los vertices del Piper", sub_titulo, ds=ds)
     fig.tight_layout(rect=(0, 0.05, 1, 0.92))
     return _png(fig)
 
@@ -587,11 +624,10 @@ def _fig_temporal_stiff(ds) -> bytes:
                    ncol=min(len(manijas), 6), fontsize=8.5, frameon=False,
                    bbox_to_anchor=(0.5, -0.01))
 
-    sub_titulo = ("complementa a los vertices: los porcentajes pueden no "
-                  "moverse mientras la concentracion total cambia")
+    sub_titulo = f"{len(estaciones)} estaciones · Concentraciones por campaña en meq/L"
     if nota:
         sub_titulo += f" - {nota}"
-    _title(fig, "Evolucion de las concentraciones del Stiff", sub_titulo)
+    _title(fig, "Evolucion de las concentraciones del Stiff", sub_titulo, ds=ds)
     fig.tight_layout(rect=(0, 0.05, 1, 0.93))
     return _png(fig)
 
@@ -620,7 +656,7 @@ def _fig_balance(ds) -> bytes:
     n_ok = int((cbe.abs() <= ds.options.cbe_acceptable_pct).sum())
     _title(fig, "Calidad analitica: balance ionico",
            f"{n_ok} de {len(cbe)} muestras dentro de "
-           f"±{ds.options.cbe_acceptable_pct:g} %")
+           f"±{ds.options.cbe_acceptable_pct:g} %", ds=ds)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     return _png(fig)
 
@@ -667,13 +703,13 @@ def _necesita_facies(ds) -> str | None:
 FIGURES: list[FigureSpec] = [
     FigureSpec("piper", "01_piper.png", "Diagrama de Piper", _fig_piper),
     FigureSpec("piper_alterno", "02_piper_convencion_alterna.png",
-               "Piper en la otra convencion", _fig_piper_alterno),
+               "Diagrama de Piper — convención alternativa", _fig_piper_alterno),
     FigureSpec("stiff", "03_stiff_por_grupo.png",
                "Stiff superpuestos por grupo", _fig_stiff_grupos),
     FigureSpec("durov", "04_durov.png", "Diagrama de Durov ampliado", _fig_durov),
     FigureSpec("facies", "05_facies.png", "Facies hidroquimicas",
                _fig_facies, _necesita_facies),
-    FigureSpec("normas", "06_normas.png", "Incumplimientos normativos", _fig_normas),
+    FigureSpec("normas", "06_normas.png", "Comparación con criterios de calidad", _fig_normas),
     FigureSpec("fluoruro", "07_fluoruro.png", "Fluoruro",
                _fig_fluoruro, _necesita_fluoruro),
     FigureSpec("balance", "08_balance_ionico.png", "Balance ionico", _fig_balance),
@@ -703,6 +739,7 @@ def available(ds) -> list[dict]:
     return out
 
 
+@serialized
 def render(ds, key: str) -> bytes:
     """Una figura suelta, en PNG."""
     spec = BY_KEY.get(key)
@@ -735,6 +772,11 @@ def _leeme(ds, hechas: list[FigureSpec], omitidas: list[tuple[FigureSpec, str]])
         "Los PNG estan a 200 ppp con fondo blanco: se pueden pegar en un",
         "informe sin reescalar.",
         "",
+        "CRITERIOS UTILIZADOS",
+        std_mod.get_standard(ds.options.standard).source,
+        *[f"  {lim.label}: {lim.range_text} ({lim.kind.label_es}). {lim.note}"
+          for lim in std_mod.get_standard(ds.options.standard).limits],
+        "",
         "INCLUIDAS",
         "-" * 60,
     ]
@@ -758,6 +800,7 @@ def _leeme(ds, hechas: list[FigureSpec], omitidas: list[tuple[FigureSpec, str]])
     return "\n".join(lineas)
 
 
+@serialized
 def render_all(ds, progress=None) -> bytes:
     """Todas las figuras que se puedan dibujar, en un ZIP con su LEEME.
 
