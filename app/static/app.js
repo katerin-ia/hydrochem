@@ -571,16 +571,17 @@ function drawPiper(divId) {
   const el = document.getElementById(divId);
   if (!el) return;
   const b = S.data.piper.background.bounds;
+  const crossed = divId === "piper-plot2";
   const th = THEME();
   const layout = {
-    margin: { l: 10, r: 10, t: 10, b: 100 },
+    margin: { l: 22, r: 22, t: 20, b: crossed ? 125 : 100 },
     xaxis: { range: [b[0], b[2]], visible: false, fixedrange: false },
     yaxis: { range: [b[1], b[3]], visible: false, scaleanchor: 'x', scaleratio: 1 },
     annotations: piperAnnotations(),
     showlegend: true,
     // Debajo y en horizontal: encima del triangulo cationico tapaba los puntos.
     legend: {
-      orientation: 'h', x: 0, y: -0.02, xanchor: 'left', yanchor: 'top',
+      orientation: 'h', x: 0, y: crossed ? -0.14 : -0.02, xanchor: 'left', yanchor: 'top',
       bgcolor: 'rgba(255,255,255,0.85)', bordercolor: th.grid, borderwidth: 1,
       font: { size: 10, color: th.ink2 }
     },

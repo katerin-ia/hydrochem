@@ -240,7 +240,8 @@ main { min-width: 0; min-height: 0; overflow: hidden; position: relative; }
 .pane > .body-flush { overflow: hidden; flex: 1; min-height: 0; position: relative; }
 
 .grid-2 { display: grid; gap: 10px; padding: 10px; height: 100%; min-height: 0; }
-.cross { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 250px; }
+.view[data-view="cross"] { overflow: auto; }
+.cross { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(570px, 1fr) 210px; min-height: 800px; }
 .cross > .pane:nth-child(3) { grid-column: 1 / -1; }
 
 /* ---------------- pantalla de bienvenida ---------------- */
@@ -753,4 +754,11 @@ td.imp { font-style: italic; color: var(--warn); }
   .view:not(.welcome) { grid-template-columns: minmax(0, 1fr) !important; grid-auto-rows: minmax(420px, auto); overflow: auto; }
   .view > .pane { min-height: 420px; }
   .status { overflow-x: auto; white-space: nowrap; }
+}
+
+@media (max-width: 800px) {
+  .grid-2.cross { height: auto; min-height: 0; }
+  .cross > .pane:first-child { height: 360px; }
+  .cross > .pane:nth-child(2) { height: 570px; }
+  .cross > .pane:nth-child(3) { height: 240px; }
 }
