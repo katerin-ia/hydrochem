@@ -279,3 +279,19 @@ def test_bounds_adapt_to_the_gap():
     narrow = background("classic", PiperLayout(gap=0.2)).bounds
     wide = background("classic", PiperLayout(gap=1.2)).bounds
     assert wide[2] > narrow[2], "un hueco mayor ensancha el encuadre"
+
+
+def test_percentage_labels_stay_outside_the_triangle_edges():
+    from hydrochem.geometry.ternary import triangle_tick_labels, TRIANGLE_HEIGHT
+    for origin in (0.0, 1.6):
+        for label in triangle_tick_labels(origin):
+            if label.va == "top":
+                assert label.y < 0
+            elif label.ha == "right":
+                left_edge = origin + label.y / (2 * TRIANGLE_HEIGHT)
+                assert label.x < left_edge
+            elif label.ha == "left":
+                right_edge = origin + 1 - label.y / (2 * TRIANGLE_HEIGHT)
+                assert label.x > right_edge
+                # The right edge indicates the lower-left component A.
+                assert abs(label.y / TRIANGLE_HEIGHT - (1 - int(label.text) / 100)) < 1e-9

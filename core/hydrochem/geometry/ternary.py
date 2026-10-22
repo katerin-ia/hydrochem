@@ -130,7 +130,7 @@ def triangle_tick_labels(
         # Borde derecho (C → B): crece A, de arriba abajo.
         out.append(
             Label(
-                origin + 0.5 * (1 + q) + offset * 0.8,
+                origin + 1.0 - q / 2 + offset * 0.8,
                 TRIANGLE_HEIGHT * q,
                 pct,
                 ha="left",
